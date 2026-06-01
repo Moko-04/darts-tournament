@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ダーツ ハウストーナメント運営</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#f8fafc; }
+  input[type=number]::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  .scroll-x::-webkit-scrollbar{ height:8px; } .scroll-x::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:4px; }
+  .chip-drag { opacity:.4; }
+</style>
+</head>
+<body class="text-gray-900">
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+/* ---------- 永続化 ---------- */
+const load = (k, d) => { try { const v = localStorage.getItem('darts_'+k); return v ? JSON.parse(v) : d; } catch { return d; } };
+const save = (k, v) => { try { localStorage.setItem('darts_'+k, JSON.stringify(v)); } catch {} };
+const STATE_KEYS = ['cfg', 'pairs', 'singles', 'teams', 'groups', 'rr', 'brk', 'assign', 'singlesNames'];
+function exportData() {
+  const data = { _app: 'darts-tournament', _v: 1 };
+  STATE_KEYS.forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) data[k] = JSON.parse(v); });
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const d = new Date(), pad = n => String(n).padStart(2, '0');
+  const store = (data.cfg && data.cfg.store) ? data.cfg.store + '-' : '';
+  a.href = url; a.download = `darts-${store}${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+  a.click(); URL.revokeObjectURL(url);
+}
+function importData(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (data._app !== 'darts-tournament') { if (!confirm('このアプリのバックアップではない可能性があります。読み込みますか？')) return; }
+      STATE_KEYS.forEach(k => { if (data[k] !== undefined) localStorage.setItem('darts_' + k, JSON.stringify(data[k])); });
+      alert('読み込みました。ページを更新します。');
+      location.reload();
+    } catch (err) { alert('読み込みに失敗しました：' + err.message); }
+  };
+  reader.readAsText(file);
+}
+const GMARK = ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16'];
+const SEP = /[\s,，、・･\/／&＆\+]+/;
+const advanceFor = g => (g >= 5 ? 3 : 2); // 各組から決勝進出数: 4組→2 / 5組以上→3（固定）
+
+/* ---------- 生成ヘルパー ---------- */
+const nextPow2 = n => { let p = 1; while (p < n) p *= 2; return p; };
+function seedOrder(n) {
+  let pls = [1, 2];
+  while (pls.length < n) { const len = pls.length * 2 + 1; const out = []; pls.forEach(p => { out.push(p); out.push(len - p); }); pls = out; }
+  return pls;
+}
+function buildBracket(seeds) {
+  if (seeds.length < 2) return null;
+  const size = nextPow2(seeds.length);
+  const slots = seedOrder(size).map(pos => seeds[pos - 1] ?? 'BYE');
+  let id = 0, rounds = [], round0 = [];
+  for (let i = 0; i < size; i += 2)
+    round0.push({ id: id++, a: { kind: 'seed', val: slots[i] }, b: { kind: 'seed', val: slots[i + 1] }, sa: 0, sb: 0, winner: null });
+  rounds.push(round0);
+  let prev = round0;
+  while (prev.length > 1) {
+    const r = [];
+    for (let i = 0; i < prev.length; i += 2)
+      r.push({ id: id++, a: { kind: 'win', m: prev[i].id }, b: { kind: 'win', m: prev[i + 1].id }, sa: 0, sb: 0, winner: null });
+    rounds.push(r); prev = r;
+  }
+  return { rounds };
+}
+const allMatches = b => b ? b.rounds.flat() : [];
+const findMatch = (b, id) => allMatches(b).find(m => m.id === id);
+function resolveSlot(b, slot) { return slot.kind === 'seed' ? slot.val : matchWinner(b, findMatch(b, slot.m)); }
+function matchWinner(b, m) {
+  if (!m) return null;
+  const a = resolveSlot(b, m.a), bb = resolveSlot(b, m.b);
+  if (a === 'BYE' && bb === 'BYE') return 'BYE';
+  if (a === 'BYE') return bb;
+  if (bb === 'BYE') return a;
+  if (m.winner === 'a') return a;
+  if (m.winner === 'b') return bb;
+  return null;
+}
+const shuffleArr = a => { const r = a.slice(); for (let i = r.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [r[i], r[j]] = [r[j], r[i]]; } return r; };
+
+const uid = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+// ペア枠＋シングル枠 → チーム配列。残ったシングルは自動でペアに組み合わせる
+function entriesToTeams(pairs, singles) {
+  const teams = []; let id = 1;
+  pairs.forEach(p => {
+    const m = [p.a, p.b].map(s => (s || '').trim()).filter(Boolean);
+    if (m.length) teams.push({ id: id++, name: m.join('・'), members: m, solo: m.length < 2 });
+  });
+  const sh = shuffleArr(singles.map(s => (s || '').trim()).filter(Boolean));
+  for (let i = 0; i < sh.length; i += 2) {
+    const m = sh[i + 1] ? [sh[i], sh[i + 1]] : [sh[i]];
+    teams.push({ id: id++, name: m.join('・'), members: m, solo: m.length < 2 });
+  }
+  return teams;
+}
+
+/* ---------- メイン ---------- */
+const TABS = [
+  ['setup', '設定'],
+  ['entry', 'エントリー'],
+  ['groups', '組分け'],
+  ['rr', 'ロビン表'],
+  ['winners', '決勝トナメ'],
+  ['losers', 'ルーザー'],
+  ['singles', 'シングルス'],
+  ['boards', 'ボード状況'],
+];
+
+function App() {
+  const [tab, setTab] = useState('setup');
+  const [cfg, setCfg] = useState(load('cfg', { store: '', boards: 4, groups: 4 }));
+  const [pairs, setPairs] = useState(load('pairs', []));     // [{id,a,b}] 固定ペア＋確定したシングル組
+  const [singles, setSingles] = useState(load('singles', [])); // [name] 相方募集中
+  const [teams, setTeams] = useState(load('teams', []));
+  const [groups, setGroups] = useState(load('groups', []));
+  const [rr, setRr] = useState(load('rr', {}));
+  const [brk, setBrk] = useState(load('brk', { winners: null, losers: null, singles: null }));
+  const [assign, setAssign] = useState(load('assign', {}));
+  const [singlesNames, setSinglesNames] = useState(load('singlesNames', ''));
+
+  useEffect(() => save('cfg', cfg), [cfg]);
+  useEffect(() => save('pairs', pairs), [pairs]);
+  useEffect(() => save('singles', singles), [singles]);
+  useEffect(() => save('teams', teams), [teams]);
+  useEffect(() => save('groups', groups), [groups]);
+  useEffect(() => save('rr', rr), [rr]);
+  useEffect(() => save('brk', brk), [brk]);
+  useEffect(() => save('assign', assign), [assign]);
+  useEffect(() => save('singlesNames', singlesNames), [singlesNames]);
+
+  const nameOf = id => { const t = teams.find(t => t.id === id); return t ? t.name : (typeof id === 'string' ? id : '?'); };
+
+  const distribute = (ts, gc) => {
+    const ids = shuffleArr(ts.map(t => t.id));
+    const gs = Array.from({ length: gc }, () => []);
+    ids.forEach((id, i) => gs[i % gc].push(id));
+    return gs;
+  };
+  function generate() {
+    const ts = entriesToTeams(pairs, singles);
+    if (ts.length < 2) { alert('2チーム以上のエントリーが必要です。'); return; }
+    if (ts.length < cfg.groups * 2) {
+      const maxG = Math.floor(ts.length / 2);
+      alert(`${cfg.groups}グループには最低${cfg.groups * 2}チーム必要です（各組2チーム以上・ダブルスは2名で1チーム）。\n現在 ${ts.length}チーム。グループ数を ${maxG} 以下にするか、チームを追加してください。`);
+      return;
+    }
+    setTeams(ts); setGroups(distribute(ts, cfg.groups));
+    setRr({}); setBrk({ winners: null, losers: null, singles: brk.singles }); setAssign({});
+    setTab('groups');
+  }
+  function reshuffle() {
+    if (rr && Object.keys(rr).length && !confirm('組をシャッフルすると入力済みのロビン結果は消えます。よろしいですか？')) return;
+    setGroups(distribute(teams, cfg.groups)); setRr({}); setBrk({ ...brk, winners: null, losers: null }); setAssign({});
+  }
+  // グループ数を変更したら、既にチームがあれば即座に再振り分け（設定と組分けを常に一致させる）
+  function changeGroupCount(v) {
+    const hasResults = rr && Object.keys(rr).length > 0;
+    if (teams.length && hasResults && !confirm('グループ数を変えると入力済みのロビン結果は消え、再振り分けされます。よろしいですか？')) return;
+    setCfg({ ...cfg, groups: v });
+    if (teams.length) { setGroups(distribute(teams, v)); setRr({}); setBrk({ winners: null, losers: null, singles: brk.singles }); setAssign({}); }
+  }
+  const movePlayer = (id, from, to) => { if (from === to) return; setGroups(gs => { const n = gs.map(a => a.slice()); n[from] = n[from].filter(x => x !== id); n[to].push(id); return n; }); };
+  function resetAll() {
+    if (!confirm('全データを消去します。よろしいですか？')) return;
+    setTeams([]); setGroups([]); setRr({}); setBrk({ winners: null, losers: null, singles: null }); setAssign({}); setPairs([]); setSingles([]); setSinglesNames(''); setTab('setup');
+  }
+
+  function setResult(gi, a, b, patch) {
+    const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+    setRr(prev => {
+      const g = { ...(prev[gi] || {}) };
+      const cur = g[key] || { a: Math.min(a, b), b: Math.max(a, b), sa: 0, sb: 0, winner: null };
+      g[key] = { ...cur, ...patch };
+      return { ...prev, [gi]: g };
+    });
+  }
+  const getResult = (gi, a, b) => { const key = a < b ? `${a}_${b}` : `${b}_${a}`; return (rr[gi] || {})[key] || null; };
+
+  function standings(gi) {
+    const ids = groups[gi] || [];
+    const stat = Object.fromEntries(ids.map(id => [id, { id, w: 0, l: 0, lf: 0, la: 0, hh: 0 }]));
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+      const r = getResult(gi, ids[i], ids[j]); if (!r || r.winner == null) continue;
+      stat[r.a].lf += r.sa; stat[r.a].la += r.sb; stat[r.b].lf += r.sb; stat[r.b].la += r.sa;
+      if (r.winner === 'a') { stat[r.a].w++; stat[r.b].l++; } else { stat[r.b].w++; stat[r.a].l++; }
+    }
+    let arr = Object.values(stat).sort((p, q) => q.w - p.w);
+    const out = []; let i = 0;
+    while (i < arr.length) {
+      let j = i; while (j < arr.length && arr[j].w === arr[i].w) j++;
+      const tie = arr.slice(i, j);
+      if (tie.length > 1) {
+        tie.forEach(t => t.hh = 0);
+        for (const x of tie) for (const y of tie) {
+          if (x === y) continue;
+          const r = getResult(gi, x.id, y.id);
+          if (r && r.winner != null) { const wid = r.winner === 'a' ? r.a : r.b; if (wid === x.id) x.hh++; }
+        }
+        tie.sort((p, q) => q.hh - p.hh || (q.lf - q.la) - (p.lf - p.la) || q.lf - p.lf);
+      }
+      out.push(...tie); i = j;
+    }
+    return out;
+  }
+
+  return (
+    <div className="min-h-screen max-w-6xl mx-auto px-4 pb-24">
+      <header className="py-4 flex items-center gap-3 flex-wrap">
+        <span className="text-2xl">🎯</span>
+        <h1 className="text-lg font-bold tracking-tight">ハウストーナメント運営 <span className="text-sm font-normal text-gray-400">ダブルス</span></h1>
+        {cfg.store && <span className="px-2 py-0.5 rounded bg-gray-200 text-sm text-gray-700">{cfg.store}</span>}
+        {teams.length > 0 && <span className="text-sm text-gray-400">{teams.length}チーム / {groups.length}グループ / {cfg.boards}台</span>}
+      </header>
+
+      <nav className="flex gap-5 overflow-x-auto scroll-x border-b border-gray-200 mb-6">
+        {TABS.map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`pb-2.5 text-base whitespace-nowrap border-b-2 -mb-px transition ${tab === k ? 'border-gray-900 text-gray-900 font-bold' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {teams.length > 0 && groups.length !== cfg.groups && (
+        <div className="mb-4 bg-amber-50 border border-amber-300 rounded-lg px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap">
+          <span className="text-sm text-amber-800">⚠️ 現在の組分けは <b>{groups.length}グループ</b> ですが、設定は <b>{cfg.groups}グループ</b> です。</span>
+          <button onClick={reshuffle} className="bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg px-3 py-1.5 whitespace-nowrap">{cfg.groups}グループで再振り分け</button>
+        </div>
+      )}
+
+      {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab }} />}
+      {tab === 'entry' && <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg }} />}
+      {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg }} />}
+      {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg }} />}
+      {tab === 'winners' && <BracketTab kind="winners" title="決勝トーナメント" {...{ groups, standings, nameOf, brk, setBrk, cfg }} />}
+      {tab === 'losers' && <BracketTab kind="losers" title="ルーザートーナメント" {...{ groups, standings, nameOf, brk, setBrk, cfg }} />}
+      {tab === 'singles' && <BracketTab kind="singles" title="シングルス（当日募集）" {...{ nameOf, brk, setBrk, singlesNames, setSinglesNames }} />}
+      {tab === 'boards' && <Boards {...{ cfg, groups, nameOf, getResult, brk, assign, setAssign }} />}
+    </div>
+  );
+}
+
+/* ---------- 設定 ---------- */
+function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab }) {
+  const Step = ({ label, val, set, min, max, hint }) => (
+    <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
+      <div className="text-sm text-gray-500 mb-2">{label}</div>
+      <div className="flex items-center gap-3">
+        <button onClick={() => set(Math.max(min, val - 1))} className="w-9 h-9 rounded-lg bg-gray-100 hover:bg-gray-200 text-lg">−</button>
+        <span className="text-2xl font-bold w-10 text-center tabular-nums">{val}</span>
+        <button onClick={() => set(Math.min(max, val + 1))} className="w-9 h-9 rounded-lg bg-gray-100 hover:bg-gray-200 text-lg">＋</button>
+        {hint && <span className="text-xs text-gray-400 ml-1">{hint}</span>}
+      </div>
+    </div>
+  );
+  return (
+    <div className="space-y-5">
+      <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
+        <label className="text-sm text-gray-500 block mb-2">店舗名</label>
+        <input value={cfg.store} onChange={e => setCfg({ ...cfg, store: e.target.value })}
+          placeholder="例: DARTS BAR ◯◯" className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Step label="🎯 台数（ボード）" val={cfg.boards} set={v => setCfg({ ...cfg, boards: v })} min={1} max={20} hint="設置台数" />
+        <Step label="🧩 グループ数" val={cfg.groups} set={changeGroupCount} min={2} max={16} hint="2〜16組" />
+      </div>
+
+      <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm text-sm text-gray-600">
+        決勝進出：各組 <b className="text-gray-900">上位{advanceFor(cfg.groups)}チーム</b> が決勝トーナメント、残りがルーザートーナメント
+        <span className="text-gray-400 ml-1">（グループ数で自動：4組→2 / 5組以上→3）</span>
+      </div>
+
+      <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium">エントリーは「エントリー」タブで管理します</div>
+          <p className="text-xs text-gray-400 mt-0.5">ペア枠・シングル枠を分けて入力 → グループに振り分け。</p>
+        </div>
+        <button onClick={() => setTab('entry')} className="bg-gray-900 hover:bg-gray-700 text-white text-sm font-bold rounded-lg px-4 py-2 whitespace-nowrap">エントリーへ →</button>
+      </div>
+
+      <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
+        <div className="text-sm font-medium mb-1">データの持ち運び（別PC・バックアップ）</div>
+        <p className="text-xs text-gray-400 mb-3">入力データはこの端末のブラウザに保存されます。別PCに移すときは、ここで<b>エクスポート</b>したファイルを、移行先で<b>インポート</b>してください。</p>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={exportData} className="bg-gray-900 hover:bg-gray-700 text-white text-sm font-bold rounded-lg px-4 py-2">⬇ エクスポート（保存）</button>
+          <label className="bg-gray-100 hover:bg-gray-200 text-sm font-medium rounded-lg px-4 py-2 cursor-pointer">
+            ⬆ インポート（読み込み）
+            <input type="file" accept="application/json,.json" className="hidden"
+              onChange={e => { if (e.target.files[0]) importData(e.target.files[0]); e.target.value = ''; }} />
+          </label>
+        </div>
+      </div>
+
+      {teams.length > 0 && (
+        <button onClick={resetAll} className="px-5 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm text-gray-600">全データをリセット</button>
+      )}
+    </div>
+  );
+}
+
+/* ---------- エントリー（ペア枠＋シングル枠） ---------- */
+function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
+  const [single, setSingle] = useState('');
+  const [drag, setDrag] = useState(null);     // ドラッグ中のシングルindex
+  const [overSlot, setOverSlot] = useState(null); // ハイライト中の "rowId:field" / "single:i" / "new"
+  useEffect(() => { if (pairs.length === 0) setPairs(Array.from({ length: 4 }, () => ({ id: uid(), a: '', b: '' }))); }, []);
+
+  const fullPairs = pairs.filter(p => (p.a || '').trim() && (p.b || '').trim()).length;
+  const soloPairs = pairs.filter(p => { const a = (p.a || '').trim(), b = (p.b || '').trim(); return (a && !b) || (b && !a); }).length;
+  const teamCount = fullPairs + soloPairs + Math.ceil(singles.length / 2);
+  const pairPeople = pairs.reduce((n, p) => n + ((p.a || '').trim() ? 1 : 0) + ((p.b || '').trim() ? 1 : 0), 0);
+  const totalPeople = pairPeople + singles.length; // エントリー合計人数
+
+  const addPairRow = () => setPairs([...pairs, { id: uid(), a: '', b: '' }]);
+  const updatePair = (id, f, v) => setPairs(pairs.map(p => p.id === id ? { ...p, [f]: v } : p));
+  const removePair = id => setPairs(pairs.filter(p => p.id !== id));
+  const addSingles = text => { const arr = text.split(/[\n,，、]/).map(s => s.trim()).filter(Boolean); if (arr.length) setSingles([...singles, ...arr]); };
+  const removeSingle = i => setSingles(singles.filter((_, k) => k !== i));
+  const pairUpSingles = () => {
+    if (singles.length < 2) { alert('シングルが2名以上必要です'); return; }
+    const sh = shuffleArr(singles); const np = [];
+    for (let i = 0; i + 1 < sh.length; i += 2) np.push({ id: uid(), a: sh[i], b: sh[i + 1] });
+    setPairs([...pairs, ...np]); setSingles(sh.length % 2 ? [sh[sh.length - 1]] : []);
+  };
+
+  // シングルをペア枠スロットへドロップ（埋まっていたら入れ替え）
+  const dropToSlot = (rowId, field) => {
+    if (drag == null) return;
+    const name = singles[drag];
+    const row = pairs.find(p => p.id === rowId);
+    const prev = (row[field] || '').trim();
+    let rest = singles.filter((_, i) => i !== drag);
+    if (prev) rest = [...rest, prev];
+    setSingles(rest);
+    let np = pairs.map(p => p.id === rowId ? { ...p, [field]: name } : p);
+    if (np.every(p => (p.a || '').trim() && (p.b || '').trim())) np = [...np, { id: uid(), a: '', b: '' }];
+    setPairs(np);
+    setDrag(null); setOverSlot(null);
+  };
+  // シングル同士をドロップして1ペアに
+  const dropOnSingle = target => {
+    if (drag == null || drag === target) { setDrag(null); setOverSlot(null); return; }
+    const a = singles[drag], b = singles[target];
+    setPairs([...pairs, { id: uid(), a, b }]);
+    setSingles(singles.filter((_, i) => i !== drag && i !== target));
+    setDrag(null); setOverSlot(null);
+  };
+  // 「ペアを追加」へドロップして新しいペア行を作成（選手Aにセット）
+  const dropToNewPair = () => {
+    if (drag == null) return;
+    const name = singles[drag];
+    setPairs([...pairs, { id: uid(), a: name, b: '' }]);
+    setSingles(singles.filter((_, i) => i !== drag));
+    setDrag(null); setOverSlot(null);
+  };
+  const slotCls = key => `flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm ${overSlot === key ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-200' : 'bg-gray-50 border-gray-300'}`;
+
+  return (
+    <div className="space-y-5">
+      {/* ペアエントリー */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="font-bold">ペアエントリー <span className="text-sm font-normal text-gray-400">（2人組）</span></h2>
+          <span className="text-xs text-gray-400">{fullPairs}組{soloPairs ? ` ＋ 相方未定${soloPairs}` : ''} ・ {pairPeople}名</span>
+        </div>
+        <div className="p-4 space-y-2">
+          {pairs.map((p, idx) => (
+            <div key={p.id} className="flex items-center gap-2">
+              <span className="text-gray-400 w-5 text-right text-sm">{idx + 1}</span>
+              <input value={p.a} onChange={e => updatePair(p.id, 'a', e.target.value)} placeholder="選手A"
+                onDragOver={e => { if (drag != null) { e.preventDefault(); setOverSlot(p.id + ':a'); } }}
+                onDragLeave={() => setOverSlot(o => o === p.id + ':a' ? null : o)}
+                onDrop={e => { e.preventDefault(); dropToSlot(p.id, 'a'); }}
+                className={slotCls(p.id + ':a')} />
+              <span className="text-gray-400">・</span>
+              <input value={p.b} onChange={e => updatePair(p.id, 'b', e.target.value)} placeholder="選手B"
+                onDragOver={e => { if (drag != null) { e.preventDefault(); setOverSlot(p.id + ':b'); } }}
+                onDragLeave={() => setOverSlot(o => o === p.id + ':b' ? null : o)}
+                onDrop={e => { e.preventDefault(); dropToSlot(p.id, 'b'); }}
+                className={slotCls(p.id + ':b')} />
+              <button onClick={() => removePair(p.id)} className="w-8 h-8 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-red-500">×</button>
+            </div>
+          ))}
+          <button onClick={addPairRow}
+            onDragOver={e => { if (drag != null) { e.preventDefault(); setOverSlot('new'); } }}
+            onDragLeave={() => setOverSlot(o => o === 'new' ? null : o)}
+            onDrop={e => { e.preventDefault(); dropToNewPair(); }}
+            className={`text-sm border border-dashed rounded-lg w-full py-2 transition ${overSlot === 'new' ? 'border-amber-400 bg-amber-50 text-amber-700 font-medium' : 'border-gray-300 text-gray-600 hover:text-gray-900'}`}>
+            {overSlot === 'new' ? '＋ ここにドロップして新しいペアに' : '＋ ペアを追加'}
+          </button>
+        </div>
+      </div>
+
+      {/* シングルエントリー */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="font-bold">シングルエントリー <span className="text-sm font-normal text-gray-400">（相方を探している人）</span></h2>
+          <span className="text-xs text-gray-400">{singles.length}名</span>
+        </div>
+        <div className="p-4 space-y-3">
+          <div className="flex gap-2">
+            <input value={single} onChange={e => setSingle(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { addSingles(single); setSingle(''); } }}
+              placeholder="名前を入力して Enter（改行・カンマで複数まとめて貼付も可）"
+              className="flex-1 bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            <button onClick={() => { addSingles(single); setSingle(''); }} className="bg-gray-100 hover:bg-gray-200 text-sm rounded-lg px-4">追加</button>
+          </div>
+          {singles.length === 0 ? (
+            <p className="text-sm text-gray-300">まだいません</p>
+          ) : (
+            <>
+              <p className="text-xs text-gray-400">名前をドラッグ → 上のペア枠にドロップで相方を指定。シングル同士を重ねると2人で1ペアになります。</p>
+              <div className="flex flex-wrap gap-2">
+                {singles.map((n, i) => (
+                  <span key={i} draggable
+                    onDragStart={() => setDrag(i)}
+                    onDragEnd={() => { setDrag(null); setOverSlot(null); }}
+                    onDragOver={e => { if (drag != null && drag !== i) { e.preventDefault(); setOverSlot('single:' + i); } }}
+                    onDragLeave={() => setOverSlot(o => o === 'single:' + i ? null : o)}
+                    onDrop={e => { e.preventDefault(); dropOnSingle(i); }}
+                    className={`inline-flex items-center gap-1 text-sm px-2.5 py-1 rounded-full border cursor-grab active:cursor-grabbing select-none ${overSlot === 'single:' + i ? 'bg-amber-100 border-amber-400 ring-2 ring-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'} ${drag === i ? 'opacity-40' : ''}`}>
+                    <span className="text-amber-300">⠿</span>{n}
+                    <button onClick={() => removeSingle(i)} className="text-amber-400 hover:text-red-500">×</button>
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+          {singles.length >= 2 && (
+            <button onClick={pairUpSingles} className="text-sm bg-gray-900 hover:bg-gray-700 text-white rounded-lg px-4 py-2">
+              🔀 残り全部をランダムでペアに
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 確定 */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center justify-between gap-3 flex-wrap">
+        <span className="text-sm text-gray-600">エントリー合計 <b className="text-lg text-gray-900">{totalPeople}</b>名 <span className="text-gray-300 mx-1">|</span> 確定チーム数 <b className="text-base text-gray-900">{teamCount}</b> <span className="text-gray-400">（ペア{pairPeople}名＋シングル{singles.length}名）</span></span>
+        <button onClick={generate} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-lg px-6 py-2.5">グループに振り分け →</button>
+      </div>
+      <p className="text-xs text-gray-400">※ 「振り分け」時、ペア枠に残ったシングルや未ペアのシングルは自動でペアに組み合わせます。{cfg.groups}グループへランダム配置 →「組分け」で手動調整。</p>
+    </div>
+  );
+}
+
+/* ---------- 組分け ---------- */
+function GroupEditor({ groups, nameOf, movePlayer, reshuffle, cfg }) {
+  const [drag, setDrag] = useState(null);
+  const [over, setOver] = useState(null);
+  if (!groups.length) return <Empty msg="設定タブでエントリーを入力してグループに振り分けてください。" />;
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <p className="text-sm text-gray-500">チームをドラッグして別グループへ移動できます。各組 <span className="text-emerald-700 font-medium">上位{advanceFor(cfg.groups)}→決勝</span> / <span className="text-amber-700 font-medium">残り→ルーザー</span></p>
+        <button onClick={reshuffle} className="bg-gray-100 hover:bg-gray-200 text-sm rounded-lg px-4 py-1.5">🔀 再シャッフル</button>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        {groups.map((ids, gi) => (
+          <div key={gi}
+            onDragOver={e => { e.preventDefault(); setOver(gi); }}
+            onDragLeave={() => setOver(o => o === gi ? null : o)}
+            onDrop={() => { if (drag) movePlayer(drag.id, drag.from, gi); setDrag(null); setOver(null); }}
+            className={`rounded-xl border p-2 min-h-[120px] shadow-sm ${over === gi ? 'border-gray-900 bg-gray-50' : 'border-gray-200 bg-white'}`}>
+            <div className="text-xs font-bold text-gray-600 px-1 pb-2 flex justify-between">
+              <span>グループ {GMARK[gi]}</span><span className="text-gray-400">{ids.length}</span>
+            </div>
+            <div className="space-y-1">
+              {ids.map(id => (
+                <div key={id} draggable
+                  onDragStart={() => setDrag({ id, from: gi })}
+                  onDragEnd={() => { setDrag(null); setOver(null); }}
+                  className={`text-sm px-2 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 cursor-grab active:cursor-grabbing ${drag && drag.id === id ? 'chip-drag' : ''}`}>
+                  {nameOf(id)}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- ロビン表 ---------- */
+function RoundRobin({ groups, nameOf, getResult, setResult, standings, cfg }) {
+  const [open, setOpen] = useState(true);
+  if (!groups.length) return <Empty msg="設定タブでエントリーを入力してグループに振り分けてください。" />;
+  return (
+    <div>
+      <button onClick={() => setOpen(o => !o)} className="flex items-center gap-2 text-xl font-bold mb-4">
+        ラウンドロビン
+        <span className="text-gray-400 text-base">{open ? '∧' : '∨'}</span>
+      </button>
+      {open && (
+        <div className="space-y-6">
+          {groups.map((ids, gi) => (
+            <GroupTable key={gi} {...{ gi, ids, nameOf, getResult, setResult, standings }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function GroupTable({ gi, ids, nameOf, getResult, setResult, standings }) {
+  const st = standings(gi);
+  const rankOf = Object.fromEntries(st.map((s, i) => [s.id, i + 1]));
+  const statOf = Object.fromEntries(st.map(s => [s.id, s]));
+
+  return (
+    <div>
+      <div className="text-sm font-bold text-gray-700 mb-1.5">グループ {GMARK[gi]}</div>
+      <div className="overflow-x-auto scroll-x rounded-xl border border-gray-300 shadow-sm bg-white">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="border-b border-gray-300">
+              <th className="py-2.5 px-2 w-8"></th>
+              <th className="py-2.5 px-2 text-left font-bold min-w-[140px]">名前</th>
+              {ids.map((_, c) => <th key={c} className="py-2.5 px-2 w-16 text-center font-bold">{c + 1}</th>)}
+              <th className="py-2.5 px-2 w-16 text-center font-bold border-l border-gray-200">勝敗</th>
+              <th className="py-2.5 px-2 w-16 text-center font-bold">Legs</th>
+              <th className="py-2.5 px-2 w-12 text-center font-bold">順位</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ids.map((rid, r) => {
+              const s = statOf[rid] || { w: 0, l: 0, lf: 0, la: 0 };
+              return (
+                <tr key={rid} className="border-b border-gray-100 last:border-0">
+                  <td className="py-2 px-2 text-center text-gray-400">{r + 1}</td>
+                  <td className="py-2 px-2 font-medium whitespace-nowrap">{nameOf(rid)}</td>
+                  {ids.map((cid, c) => {
+                    if (rid === cid) return <td key={cid} className="bg-gray-100"></td>;
+                    const res = getResult(gi, rid, cid);
+                    const iAmA = res ? res.a === rid : rid < cid;
+                    const myLeg = res ? (iAmA ? res.sa : res.sb) : 0;
+                    const opLeg = res ? (iAmA ? res.sb : res.sa) : 0;
+                    const decided = res && res.winner != null;
+                    if (c > r) {
+                      const setLeg = (who, v) => {
+                        v = Math.max(0, +v || 0);
+                        const nMy = who === 'my' ? v : myLeg, nOp = who === 'op' ? v : opLeg;
+                        const a = Math.min(rid, cid), b = Math.max(rid, cid);
+                        const aLeg = a === rid ? nMy : nOp, bLeg = b === rid ? nMy : nOp;
+                        setResult(gi, a, b, { sa: aLeg, sb: bLeg, winner: aLeg === bLeg ? null : (aLeg > bLeg ? 'a' : 'b') });
+                      };
+                      return (
+                        <td key={cid} className="text-center">
+                          <div className="flex items-center justify-center gap-0.5">
+                            <input type="number" value={myLeg || ''} onChange={e => setLeg('my', e.target.value)}
+                              className="w-6 text-center tabular-nums bg-transparent rounded hover:bg-gray-100 focus:bg-gray-100 focus:outline-none py-1" placeholder="-" />
+                            <span className="text-gray-400">-</span>
+                            <input type="number" value={opLeg || ''} onChange={e => setLeg('op', e.target.value)}
+                              className="w-6 text-center tabular-nums bg-transparent rounded hover:bg-gray-100 focus:bg-gray-100 focus:outline-none py-1" placeholder="-" />
+                          </div>
+                        </td>
+                      );
+                    }
+                    return <td key={cid} className="text-center tabular-nums text-gray-500">{decided ? `${myLeg} - ${opLeg}` : ''}</td>;
+                  })}
+                  <td className="py-2 px-2 text-center tabular-nums border-l border-gray-200">{s.w} - {s.l}</td>
+                  <td className="py-2 px-2 text-center tabular-nums text-gray-600">{s.lf} - {s.la}</td>
+                  <td className="py-2 px-2 text-center font-bold text-base">{rankOf[rid]}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- ブラケット ---------- */
+function BracketTab({ kind, title, groups, standings, nameOf, brk, setBrk, cfg, singlesNames, setSinglesNames }) {
+  const b = brk[kind];
+  function seedsFor() {
+    if (kind === 'singles') return singlesNames.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const sts = groups.map((_, gi) => standings(gi));
+    const seeds = [];
+    const adv = advanceFor(cfg.groups);
+    if (kind === 'winners') { for (let r = 0; r < adv; r++) sts.forEach(s => { if (s[r]) seeds.push(s[r].id); }); }
+    else { const maxLen = Math.max(0, ...sts.map(s => s.length)); for (let r = adv; r < maxLen; r++) sts.forEach(s => { if (s[r]) seeds.push(s[r].id); }); }
+    return seeds;
+  }
+  function gen() {
+    const seeds = seedsFor();
+    if (seeds.length < 2) { alert('対象が2チーム未満です。'); return; }
+    if (b && !confirm('既存のトーナメントを破棄して作り直しますか？')) return;
+    setBrk({ ...brk, [kind]: buildBracket(seeds) });
+  }
+  const setWinner = (mid, side) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); findMatch(nb, mid).winner = side; return { ...prev, [kind]: nb }; });
+  const setScore = (mid, key, v) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); const m = findMatch(nb, mid); m[key] = Math.max(0, v); if (m.sa !== m.sb) m.winner = m.sa > m.sb ? 'a' : 'b'; return { ...prev, [kind]: nb }; });
+
+  if (!b) {
+    const preview = seedsFor();
+    return (
+      <div className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm">
+        <h2 className="text-lg font-bold mb-1 text-center">{title}</h2>
+        {kind === 'singles' ? (
+          <div className="max-w-md mx-auto">
+            <p className="text-sm text-gray-500 mb-2 text-center">当日募集の個人戦。参加者名を入力（1行に1名）。</p>
+            <textarea value={singlesNames} onChange={e => setSinglesNames(e.target.value)} rows={8}
+              placeholder={"参加者A\n参加者B\n…"} className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" />
+            <p className="text-xs text-gray-400 mt-1 text-center">{preview.length}名</p>
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-gray-500 mb-4 text-center">ロビン表の順位から自動シード（対象 {preview.length}チーム）。</p>
+            {preview.length >= 2 && (
+              <div className="flex flex-wrap gap-1.5 justify-center mb-2">
+                {preview.map((id, i) => <span key={id} className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">{i + 1}. {nameOf(id)}</span>)}
+              </div>
+            )}
+          </>
+        )}
+        <div className="text-center mt-4">
+          <button onClick={gen} disabled={preview.length < 2} className="bg-gray-900 hover:bg-gray-700 disabled:opacity-30 text-white font-bold rounded-lg px-6 py-2.5">{title}を作成</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold">{title}</h2>
+        <button onClick={gen} className="text-xs text-gray-500 hover:text-gray-800 underline">組み直し</button>
+      </div>
+      <div className="overflow-x-auto scroll-x pb-3">
+        <div className="flex gap-6 min-w-min">
+          {b.rounds.map((round, ri) => (
+            <div key={ri} className="flex flex-col justify-around gap-3 min-w-[210px]">
+              <div className="text-xs text-gray-400 text-center mb-1">{ri === b.rounds.length - 1 ? '決勝' : ri === b.rounds.length - 2 ? '準決勝' : `${round.length * 2}`}</div>
+              {round.map(m => {
+                const aId = resolveSlot(b, m.a), bId = resolveSlot(b, m.b);
+                const win = matchWinner(b, m);
+                const Slot = ({ id, side, score }) => {
+                  const real = id && id !== 'BYE';
+                  return (
+                    <div className={`flex items-center justify-between gap-2 px-2 py-1 rounded ${win === id && real ? 'bg-emerald-100' : ''}`}>
+                      <button disabled={!real} onClick={() => setWinner(m.id, side)}
+                        className={`text-sm truncate text-left flex-1 ${real ? (win === id ? 'text-emerald-800 font-semibold' : 'text-gray-800 hover:text-emerald-700') : 'text-gray-400'}`}>
+                        {id === 'BYE' ? '― BYE ―' : (real ? nameOf(id) : '勝者待ち')}
+                      </button>
+                      {real && <input type="number" value={score} onChange={e => setScore(m.id, side === 'a' ? 'sa' : 'sb', +e.target.value)} className="w-8 bg-gray-50 border border-gray-300 rounded text-center text-xs py-0.5" />}
+                    </div>
+                  );
+                };
+                return (
+                  <div key={m.id} className="bg-white border border-gray-300 rounded-lg p-1.5 shadow-sm">
+                    <Slot id={aId} side="a" score={m.sa} />
+                    <div className="border-t border-gray-200 my-0.5" />
+                    <Slot id={bId} side="b" score={m.sb} />
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- ボード状況 ---------- */
+function Boards({ cfg, groups, nameOf, getResult, brk, assign, setAssign }) {
+  const ready = [];
+  groups.forEach((ids, gi) => {
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+      const r = getResult(gi, ids[i], ids[j]);
+      if (!r || r.winner == null) ready.push({ gid: `rr-${gi}-${ids[i]}-${ids[j]}`, label: `グループ${GMARK[gi]}`, a: ids[i], b: ids[j] });
+    }
+  });
+  ['winners', 'losers', 'singles'].forEach(kind => {
+    const b = brk[kind]; if (!b) return;
+    const tag = { winners: '決勝T', losers: 'ルーザー', singles: 'シングルス' }[kind];
+    allMatches(b).forEach(m => {
+      const a = resolveSlot(b, m.a), bb = resolveSlot(b, m.b);
+      if (a && a !== 'BYE' && bb && bb !== 'BYE' && m.winner == null) ready.push({ gid: `${kind}-${m.id}`, label: tag, a, b: bb });
+    });
+  });
+
+  const occupied = {};
+  Object.entries(assign).forEach(([gid, bn]) => { if (ready.find(r => r.gid === gid)) occupied[bn] = gid; });
+
+  function autoAssign() {
+    const next = { ...assign }; const free = [];
+    for (let n = 1; n <= cfg.boards; n++) if (!occupied[n]) free.push(n);
+    let fi = 0;
+    for (const r of ready) { if (Object.values(occupied).includes(r.gid)) continue; if (fi >= free.length) break; next[r.gid] = free[fi++]; }
+    setAssign(next);
+  }
+  const clearBoard = n => { const gid = occupied[n]; if (!gid) return; const next = { ...assign }; delete next[gid]; setAssign(next); };
+  const boardList = Array.from({ length: cfg.boards }, (_, i) => i + 1);
+  const waiting = ready.filter(r => !Object.values(occupied).includes(r.gid));
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold">ボード状況 <span className="text-sm text-gray-400 font-normal">（{cfg.boards}台）</span></h2>
+        <button onClick={autoAssign} className="bg-gray-900 hover:bg-gray-700 text-white text-sm font-bold rounded-lg px-4 py-1.5">空き台に自動割当</button>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+        {boardList.map(n => {
+          const gid = occupied[n]; const m = ready.find(r => r.gid === gid);
+          return (
+            <div key={n} className={`rounded-xl border p-3 min-h-[120px] flex flex-col shadow-sm ${m ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-gray-200'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-gray-500">🎯 ボード {n}</span>
+                {m && <button onClick={() => clearBoard(n)} className="text-xs text-gray-400 hover:text-red-500">空ける</button>}
+              </div>
+              {m ? (
+                <div className="flex-1 flex flex-col justify-center">
+                  <span className="text-[10px] text-emerald-600 mb-1">{m.label}</span>
+                  <span className="text-sm font-semibold leading-snug">{nameOf(m.a)}</span>
+                  <span className="text-xs text-gray-400 my-0.5">vs</span>
+                  <span className="text-sm font-semibold leading-snug">{nameOf(m.b)}</span>
+                </div>
+              ) : <div className="flex-1 flex items-center justify-center text-gray-300 text-sm">空き</div>}
+            </div>
+          );
+        })}
+      </div>
+      <div>
+        <h3 className="text-sm text-gray-500 mb-2">待機中の試合 <span className="text-gray-400">{waiting.length}</span></h3>
+        {waiting.length === 0 ? <p className="text-sm text-gray-400">なし</p> : (
+          <div className="flex flex-wrap gap-2">
+            {waiting.map(r => (
+              <span key={r.gid} className="text-xs px-2 py-1 rounded-lg bg-white border border-gray-200 text-gray-600">
+                <span className="text-gray-400">{r.label}:</span> {nameOf(r.a)} vs {nameOf(r.b)}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Empty({ msg }) { return <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400 text-sm shadow-sm">{msg}</div>; }
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
