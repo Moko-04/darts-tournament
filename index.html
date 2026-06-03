@@ -13,6 +13,27 @@
   input[type=number]::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
   .scroll-x::-webkit-scrollbar{ height:8px; } .scroll-x::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:4px; }
   .chip-drag { opacity:.4; }
+  /* トーナメント（コンパクトなカード＋連結線） */
+  .bk { display:flex; align-items:stretch; gap:44px; padding:4px 0; }
+  .bk-round { display:flex; flex-direction:column; min-width:160px; }
+  .bk-label { text-align:center; font-size:11px; color:#9ca3af; margin-bottom:6px; }
+  .bk-body { display:flex; flex-direction:column; flex:1; }
+  .bk-mg { flex:1; display:flex; flex-direction:column; justify-content:center; position:relative; }
+  .bk-card { position:relative; border:1px solid #d1d5db; border-radius:8px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+  .bk-slot { position:relative; }
+  .bk-slot + .bk-slot { border-top:1px solid #e5e7eb; }
+  /* 各チーム → カード中央へ（両チームから線が出る） */
+  .bk-card .bk-slot:nth-child(1)::after { content:''; position:absolute; left:100%; top:50%; width:12px; height:50%; border-top:2px solid #cbd5e1; border-right:2px solid #cbd5e1; }
+  .bk-card .bk-slot:nth-child(2)::after { content:''; position:absolute; left:100%; bottom:50%; width:12px; height:50%; border-bottom:2px solid #cbd5e1; border-right:2px solid #cbd5e1; }
+  /* カード中央 → 次の試合へ（ペアを縦線で合流） */
+  .bk-round:not(:last-child) .bk-mg::after { content:''; position:absolute; right:-22px; width:22px; }
+  .bk-round:not(:last-child) .bk-mg:nth-child(odd)::after { top:50%; height:50%; border-top:2px solid #cbd5e1; border-right:2px solid #cbd5e1; }
+  .bk-round:not(:last-child) .bk-mg:nth-child(even)::after { bottom:50%; height:50%; border-bottom:2px solid #cbd5e1; border-right:2px solid #cbd5e1; }
+  .bk-round:not(:first-child) .bk-mg::before { content:''; position:absolute; left:-22px; top:calc(50% - 1px); width:22px; height:2px; background:#cbd5e1; }
+  /* 勝者の線を赤に */
+  .bk-slot-win::after { border-color:#ef4444 !important; z-index:1; }
+  .bk-mg-out::after { border-color:#ef4444 !important; }
+  .bk-mg-adv::before { background:#ef4444 !important; }
 </style>
 </head>
 <body class="text-gray-900">
@@ -52,6 +73,39 @@ function importData(file) {
 const GMARK = ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16'];
 const SEP = /[\s,，、・･\/／&＆\+]+/;
 const advanceFor = g => (g >= 5 ? 3 : 2); // 各組から決勝進出数: 4組→2 / 5組以上→3（固定）
+const circled = n => (n >= 1 && n <= 20) ? String.fromCharCode(0x2460 + n - 1) : String(n);
+// 指定の対戦順（位置1始まり）。4名・5名はこの順に固定。
+const FIXED_SCHEDULES = {
+  4: [[1, 2], [3, 4], [1, 3], [2, 4], [1, 4], [2, 3]],
+  5: [[1, 2], [3, 4], [1, 5], [2, 3], [4, 5], [1, 3], [2, 4], [3, 5], [1, 4], [2, 5]],
+};
+function scheduleOrder(ids) {
+  const fixed = FIXED_SCHEDULES[ids.length];
+  if (fixed) return fixed.map(([p, q]) => [ids[p - 1], ids[q - 1]]);
+  // それ以外の人数は円卓方式（各ラウンドで全員1試合）
+  const arr = ids.slice();
+  if (arr.length % 2) arr.push(null);
+  const n = arr.length;
+  let list = arr.slice();
+  const seq = [];
+  for (let r = 0; r < n - 1; r++) {
+    for (let i = 0; i < n / 2; i++) {
+      const a = list[i], b = list[n - 1 - i];
+      if (a != null && b != null) seq.push([a, b]);
+    }
+    list = [list[0], list[n - 1], ...list.slice(1, n - 1)];
+  }
+  return seq;
+}
+
+// === 開発用テストデータ（完成までの仮。空のとき自動投入＆ボタンで再投入）===
+const DEV_SEED = true;
+const DEV_PAIRS = [
+  ['佐藤', '鈴木'], ['高橋', '田中'], ['伊藤', '渡辺'], ['山本', '中村'], ['小林', '加藤'],
+  ['吉田', '山田'], ['佐々木', '山口'], ['松本', '井上'], ['木村', '林'], ['斎藤', '清水'],
+  ['山崎', '森'], ['池田', '橋本'], ['阿部', '石川'], ['前田', '藤田'], ['後藤', '小川'],
+  ['岡田', '長谷川'], ['村上', '近藤'],
+].map((m, i) => ({ id: 't' + (i + 1), a: m[0], b: m[1] }));
 
 /* ---------- 生成ヘルパー ---------- */
 const nextPow2 = n => { let p = 1; while (p < n) p *= 2; return p; };
@@ -114,8 +168,7 @@ const TABS = [
   ['entry', 'エントリー'],
   ['groups', '組分け'],
   ['rr', 'ロビン表'],
-  ['winners', '決勝トナメ'],
-  ['losers', 'ルーザー'],
+  ['tournament', 'トーナメント'],
   ['singles', 'シングルス'],
   ['boards', 'ボード状況'],
 ];
@@ -142,7 +195,14 @@ function App() {
   useEffect(() => save('assign', assign), [assign]);
   useEffect(() => save('singlesNames', singlesNames), [singlesNames]);
 
-  const nameOf = id => { const t = teams.find(t => t.id === id); return t ? t.name : (typeof id === 'string' ? id : '?'); };
+  // 開発用: データが空なら17組のテストデータを自動投入（完成までの仮）
+  useEffect(() => { if (DEV_SEED && pairs.length === 0 && teams.length === 0) setPairs(DEV_PAIRS); }, []);
+  function loadTestData() {
+    if ((pairs.length || teams.length) && !confirm('現在のデータを破棄して17組のテストデータを投入します。よろしいですか？')) return;
+    setPairs(DEV_PAIRS); setSingles([]); setTeams([]); setGroups([]); setRr({}); setBrk({ winners: null, losers: null, singles: null }); setAssign({}); setTab('entry');
+  }
+
+  const nameOf = id => { const t = teams.find(t => t.id === id); if (t) return (t.members && t.members.length ? t.members.join('・') : t.name); return typeof id === 'string' ? id : '?'; };
 
   const distribute = (ts, gc) => {
     const ids = shuffleArr(ts.map(t => t.id));
@@ -174,6 +234,20 @@ function App() {
     if (teams.length) { setGroups(distribute(teams, v)); setRr({}); setBrk({ winners: null, losers: null, singles: brk.singles }); setAssign({}); }
   }
   const movePlayer = (id, from, to) => { if (from === to) return; setGroups(gs => { const n = gs.map(a => a.slice()); n[from] = n[from].filter(x => x !== id); n[to].push(id); return n; }); };
+  // ロビン表/組分けでチーム同士を入れ替え（グループをまたぐ場合は該当グループの結果をクリア）
+  function swapTeams(giA, idA, giB, idB) {
+    if (idA === idB) return;
+    const cross = giA !== giB;
+    if (cross) {
+      const hasRes = gi => rr[gi] && Object.values(rr[gi]).some(m => m.winner != null);
+      if ((hasRes(giA) || hasRes(giB)) && !confirm('グループをまたいで入れ替えると、該当グループの入力済み結果は消えます。よろしいですか？')) return;
+    }
+    setGroups(gs => gs.map(arr => arr.map(id => id === idA ? idB : (id === idB ? idA : id))));
+    if (cross) {
+      setRr(prev => { const n = { ...prev }; delete n[giA]; delete n[giB]; return n; });
+      setBrk({ winners: null, losers: null, singles: brk.singles }); setAssign({});
+    }
+  }
   function resetAll() {
     if (!confirm('全データを消去します。よろしいですか？')) return;
     setTeams([]); setGroups([]); setRr({}); setBrk({ winners: null, losers: null, singles: null }); setAssign({}); setPairs([]); setSingles([]); setSinglesNames(''); setTab('setup');
@@ -181,12 +255,19 @@ function App() {
 
   function setResult(gi, a, b, patch) {
     const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+    const cur = (rr[gi] && rr[gi][key]) || { a: Math.min(a, b), b: Math.max(a, b), sa: 0, sb: 0, winner: null };
+    const merged = { ...cur, ...patch };
     setRr(prev => {
       const g = { ...(prev[gi] || {}) };
-      const cur = g[key] || { a: Math.min(a, b), b: Math.max(a, b), sa: 0, sb: 0, winner: null };
-      g[key] = { ...cur, ...patch };
+      const c = g[key] || { a: Math.min(a, b), b: Math.max(a, b), sa: 0, sb: 0, winner: null };
+      g[key] = { ...c, ...patch };
       return { ...prev, [gi]: g };
     });
+    // 結果が確定したら、その試合の台割当を自動でクリア（台を次の試合へ）
+    if (merged.winner != null) {
+      const gid = `rr-${gi}-${Math.min(a, b)}-${Math.max(a, b)}`;
+      setAssign(prev => { if (prev[gid] == null) return prev; const n = { ...prev }; delete n[gid]; return n; });
+    }
   }
   const getResult = (gi, a, b) => { const key = a < b ? `${a}_${b}` : `${b}_${a}`; return (rr[gi] || {})[key] || null; };
 
@@ -242,12 +323,11 @@ function App() {
         </div>
       )}
 
-      {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab }} />}
+      {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData }} />}
       {tab === 'entry' && <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg }} />}
       {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg }} />}
-      {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg }} />}
-      {tab === 'winners' && <BracketTab kind="winners" title="決勝トーナメント" {...{ groups, standings, nameOf, brk, setBrk, cfg }} />}
-      {tab === 'losers' && <BracketTab kind="losers" title="ルーザートーナメント" {...{ groups, standings, nameOf, brk, setBrk, cfg }} />}
+      {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }} />}
+      {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult }} />}
       {tab === 'singles' && <BracketTab kind="singles" title="シングルス（当日募集）" {...{ nameOf, brk, setBrk, singlesNames, setSinglesNames }} />}
       {tab === 'boards' && <Boards {...{ cfg, groups, nameOf, getResult, brk, assign, setAssign }} />}
     </div>
@@ -255,7 +335,7 @@ function App() {
 }
 
 /* ---------- 設定 ---------- */
-function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab }) {
+function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData }) {
   const Step = ({ label, val, set, min, max, hint }) => (
     <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
       <div className="text-sm text-gray-500 mb-2">{label}</div>
@@ -306,6 +386,11 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab }) {
         </div>
       </div>
 
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
+        <div className="text-sm text-amber-800">🧪 開発用テストデータ（17組／34名）<span className="text-amber-600 text-xs ml-1">※完成時に外します</span></div>
+        <button onClick={loadTestData} className="bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg px-4 py-2 whitespace-nowrap">17組を投入（やり直し）</button>
+      </div>
+
       {teams.length > 0 && (
         <button onClick={resetAll} className="px-5 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm text-gray-600">全データをリセット</button>
       )}
@@ -338,37 +423,77 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
     setPairs([...pairs, ...np]); setSingles(sh.length % 2 ? [sh[sh.length - 1]] : []);
   };
 
-  // シングルをペア枠スロットへドロップ（埋まっていたら入れ替え）
+  // drag = null | {kind:'single', i, name} | {kind:'slot', id, field, name}
+  const clearDrag = () => { setDrag(null); setOverSlot(null); };
+  const valAt = (id, f) => { const r = pairs.find(p => p.id === id); return r ? (r[f] || '') : ''; };
+
+  // ペア枠スロットへドロップ
   const dropToSlot = (rowId, field) => {
-    if (drag == null) return;
-    const name = singles[drag];
-    const row = pairs.find(p => p.id === rowId);
-    const prev = (row[field] || '').trim();
-    let rest = singles.filter((_, i) => i !== drag);
-    if (prev) rest = [...rest, prev];
-    setSingles(rest);
-    let np = pairs.map(p => p.id === rowId ? { ...p, [field]: name } : p);
-    if (np.every(p => (p.a || '').trim() && (p.b || '').trim())) np = [...np, { id: uid(), a: '', b: '' }];
-    setPairs(np);
-    setDrag(null); setOverSlot(null);
+    if (!drag) return;
+    if (drag.kind === 'single') {
+      const name = singles[drag.i];
+      const prev = valAt(rowId, field).trim();
+      let rest = singles.filter((_, i) => i !== drag.i);
+      if (prev) rest = [...rest, prev];
+      setSingles(rest);
+      let np = pairs.map(p => p.id === rowId ? { ...p, [field]: name } : p);
+      if (np.every(p => (p.a || '').trim() && (p.b || '').trim())) np = [...np, { id: uid(), a: '', b: '' }];
+      setPairs(np);
+    } else { // slot → slot : 入れ替え
+      if (drag.id === rowId && drag.field === field) { clearDrag(); return; }
+      if (drag.id === rowId) {
+        setPairs(pairs.map(p => p.id === rowId ? { ...p, [field]: p[drag.field], [drag.field]: p[field] } : p));
+      } else {
+        const targetOld = valAt(rowId, field);
+        setPairs(pairs.map(p => p.id === rowId ? { ...p, [field]: drag.name } : (p.id === drag.id ? { ...p, [drag.field]: targetOld } : p)));
+      }
+    }
+    clearDrag();
   };
-  // シングル同士をドロップして1ペアに
+  // シングルチップへドロップ
   const dropOnSingle = target => {
-    if (drag == null || drag === target) { setDrag(null); setOverSlot(null); return; }
-    const a = singles[drag], b = singles[target];
-    setPairs([...pairs, { id: uid(), a, b }]);
-    setSingles(singles.filter((_, i) => i !== drag && i !== target));
-    setDrag(null); setOverSlot(null);
+    if (!drag) { clearDrag(); return; }
+    if (drag.kind === 'single') {
+      if (drag.i === target) { clearDrag(); return; }
+      setPairs([...pairs, { id: uid(), a: singles[drag.i], b: singles[target] }]);
+      setSingles(singles.filter((_, i) => i !== drag.i && i !== target));
+    } else { // slot → single : 入れ替え
+      const slotName = drag.name, singleName = singles[target];
+      setSingles(singles.map((s, i) => i === target ? slotName : s));
+      setPairs(pairs.map(p => p.id === drag.id ? { ...p, [drag.field]: singleName } : p));
+    }
+    clearDrag();
   };
-  // 「ペアを追加」へドロップして新しいペア行を作成（選手Aにセット）
+  // 「ペアを追加」へドロップ → 新しいペア行
   const dropToNewPair = () => {
-    if (drag == null) return;
-    const name = singles[drag];
-    setPairs([...pairs, { id: uid(), a: name, b: '' }]);
-    setSingles(singles.filter((_, i) => i !== drag));
-    setDrag(null); setOverSlot(null);
+    if (!drag) return;
+    if (drag.kind === 'single') {
+      setPairs([...pairs, { id: uid(), a: singles[drag.i], b: '' }]);
+      setSingles(singles.filter((_, i) => i !== drag.i));
+    } else {
+      setPairs([...pairs.map(p => p.id === drag.id ? { ...p, [drag.field]: '' } : p), { id: uid(), a: drag.name, b: '' }]);
+    }
+    clearDrag();
+  };
+  // シングル枠へドロップ → ペアの名前を相方募集に戻す
+  const dropToSingles = () => {
+    if (!drag || drag.kind !== 'slot') { clearDrag(); return; }
+    setSingles([...singles, drag.name]);
+    setPairs(pairs.map(p => p.id === drag.id ? { ...p, [drag.field]: '' } : p));
+    clearDrag();
   };
   const slotCls = key => `flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm ${overSlot === key ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-200' : 'bg-gray-50 border-gray-300'}`;
+  const grip = (id, field) => {
+    const v = (valAt(id, field) || '').trim();
+    const dim = drag && drag.kind === 'slot' && drag.id === id && drag.field === field;
+    return (
+      <span draggable={!!v}
+        onDragStart={() => v && setDrag({ kind: 'slot', id, field, name: valAt(id, field) })}
+        onDragEnd={clearDrag}
+        title={v ? 'ドラッグして移動（入れ替え／別ペア／シングルへ戻す）' : ''}
+        className={`select-none text-base leading-none ${v ? 'cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-600' : 'text-transparent'} ${dim ? 'opacity-30' : ''}`}>⠿</span>
+    );
+  };
 
   return (
     <div className="space-y-5">
@@ -379,23 +504,30 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
           <span className="text-xs text-gray-400">{fullPairs}組{soloPairs ? ` ＋ 相方未定${soloPairs}` : ''} ・ {pairPeople}名</span>
         </div>
         <div className="p-4 space-y-2">
-          {pairs.map((p, idx) => (
-            <div key={p.id} className="flex items-center gap-2">
-              <span className="text-gray-400 w-5 text-right text-sm">{idx + 1}</span>
-              <input value={p.a} onChange={e => updatePair(p.id, 'a', e.target.value)} placeholder="選手A"
-                onDragOver={e => { if (drag != null) { e.preventDefault(); setOverSlot(p.id + ':a'); } }}
-                onDragLeave={() => setOverSlot(o => o === p.id + ':a' ? null : o)}
-                onDrop={e => { e.preventDefault(); dropToSlot(p.id, 'a'); }}
-                className={slotCls(p.id + ':a')} />
-              <span className="text-gray-400">・</span>
-              <input value={p.b} onChange={e => updatePair(p.id, 'b', e.target.value)} placeholder="選手B"
-                onDragOver={e => { if (drag != null) { e.preventDefault(); setOverSlot(p.id + ':b'); } }}
-                onDragLeave={() => setOverSlot(o => o === p.id + ':b' ? null : o)}
-                onDrop={e => { e.preventDefault(); dropToSlot(p.id, 'b'); }}
-                className={slotCls(p.id + ':b')} />
-              <button onClick={() => removePair(p.id)} className="w-8 h-8 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-red-500">×</button>
-            </div>
-          ))}
+          <p className="text-xs text-gray-400">⠿ を掴んで名前を移動できます（別の枠へドロップで<b>入れ替え</b>／「＋ペアを追加」で<b>別ペア</b>／シングル枠へ戻すと<b>相方募集</b>に）。</p>
+          {pairs.map((p, idx) => {
+            const dimA = drag && drag.kind === 'slot' && drag.id === p.id && drag.field === 'a';
+            const dimB = drag && drag.kind === 'slot' && drag.id === p.id && drag.field === 'b';
+            return (
+              <div key={p.id} className="flex items-center gap-1">
+                <span className="text-gray-400 w-5 text-right text-sm mr-0.5">{idx + 1}</span>
+                {grip(p.id, 'a')}
+                <input value={p.a} onChange={e => updatePair(p.id, 'a', e.target.value)} placeholder="選手A"
+                  onDragOver={e => { if (drag) { e.preventDefault(); setOverSlot(p.id + ':a'); } }}
+                  onDragLeave={() => setOverSlot(o => o === p.id + ':a' ? null : o)}
+                  onDrop={e => { e.preventDefault(); dropToSlot(p.id, 'a'); }}
+                  className={slotCls(p.id + ':a') + (dimA ? ' opacity-30' : '')} />
+                <span className="text-gray-400 mx-0.5">・</span>
+                {grip(p.id, 'b')}
+                <input value={p.b} onChange={e => updatePair(p.id, 'b', e.target.value)} placeholder="選手B"
+                  onDragOver={e => { if (drag) { e.preventDefault(); setOverSlot(p.id + ':b'); } }}
+                  onDragLeave={() => setOverSlot(o => o === p.id + ':b' ? null : o)}
+                  onDrop={e => { e.preventDefault(); dropToSlot(p.id, 'b'); }}
+                  className={slotCls(p.id + ':b') + (dimB ? ' opacity-30' : '')} />
+                <button onClick={() => removePair(p.id)} className="w-8 h-8 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-red-500">×</button>
+              </div>
+            );
+          })}
           <button onClick={addPairRow}
             onDragOver={e => { if (drag != null) { e.preventDefault(); setOverSlot('new'); } }}
             onDragLeave={() => setOverSlot(o => o === 'new' ? null : o)}
@@ -412,7 +544,10 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
           <h2 className="font-bold">シングルエントリー <span className="text-sm font-normal text-gray-400">（相方を探している人）</span></h2>
           <span className="text-xs text-gray-400">{singles.length}名</span>
         </div>
-        <div className="p-4 space-y-3">
+        <div className={`p-4 space-y-3 ${overSlot === 'singles' ? 'ring-2 ring-amber-300 rounded-b-xl' : ''}`}
+          onDragOver={e => { if (drag && drag.kind === 'slot') { e.preventDefault(); setOverSlot('singles'); } }}
+          onDragLeave={() => setOverSlot(o => o === 'singles' ? null : o)}
+          onDrop={e => { if (drag && drag.kind === 'slot') { e.preventDefault(); dropToSingles(); } }}>
           <div className="flex gap-2">
             <input value={single} onChange={e => setSingle(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') { addSingles(single); setSingle(''); } }}
@@ -421,23 +556,27 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
             <button onClick={() => { addSingles(single); setSingle(''); }} className="bg-gray-100 hover:bg-gray-200 text-sm rounded-lg px-4">追加</button>
           </div>
           {singles.length === 0 ? (
-            <p className="text-sm text-gray-300">まだいません</p>
+            <p className="text-sm text-gray-300">{drag && drag.kind === 'slot' ? 'ここにドロップで相方募集に戻す' : 'まだいません'}</p>
           ) : (
             <>
-              <p className="text-xs text-gray-400">名前をドラッグ → 上のペア枠にドロップで相方を指定。シングル同士を重ねると2人で1ペアになります。</p>
+              <p className="text-xs text-gray-400">⠿ をドラッグ → 上のペア枠で相方指定／シングル同士を重ねて1ペア。ペア枠の名前をこの枠にドロップで相方募集に戻せます。</p>
               <div className="flex flex-wrap gap-2">
-                {singles.map((n, i) => (
-                  <span key={i} draggable
-                    onDragStart={() => setDrag(i)}
-                    onDragEnd={() => { setDrag(null); setOverSlot(null); }}
-                    onDragOver={e => { if (drag != null && drag !== i) { e.preventDefault(); setOverSlot('single:' + i); } }}
-                    onDragLeave={() => setOverSlot(o => o === 'single:' + i ? null : o)}
-                    onDrop={e => { e.preventDefault(); dropOnSingle(i); }}
-                    className={`inline-flex items-center gap-1 text-sm px-2.5 py-1 rounded-full border cursor-grab active:cursor-grabbing select-none ${overSlot === 'single:' + i ? 'bg-amber-100 border-amber-400 ring-2 ring-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'} ${drag === i ? 'opacity-40' : ''}`}>
-                    <span className="text-amber-300">⠿</span>{n}
-                    <button onClick={() => removeSingle(i)} className="text-amber-400 hover:text-red-500">×</button>
-                  </span>
-                ))}
+                {singles.map((n, i) => {
+                  const dim = drag && drag.kind === 'single' && drag.i === i;
+                  const hl = overSlot === 'single:' + i;
+                  return (
+                    <span key={i} draggable
+                      onDragStart={() => setDrag({ kind: 'single', i, name: n })}
+                      onDragEnd={clearDrag}
+                      onDragOver={e => { if (drag && !(drag.kind === 'single' && drag.i === i)) { e.preventDefault(); e.stopPropagation(); setOverSlot('single:' + i); } }}
+                      onDragLeave={() => setOverSlot(o => o === 'single:' + i ? null : o)}
+                      onDrop={e => { e.preventDefault(); e.stopPropagation(); dropOnSingle(i); }}
+                      className={`inline-flex items-center gap-1 text-sm px-2.5 py-1 rounded-full border cursor-grab active:cursor-grabbing select-none ${hl ? 'bg-amber-100 border-amber-400 ring-2 ring-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'} ${dim ? 'opacity-40' : ''}`}>
+                      <span className="text-amber-300">⠿</span>{n}
+                      <button onClick={() => removeSingle(i)} className="text-amber-400 hover:text-red-500">×</button>
+                    </span>
+                  );
+                })}
               </div>
             </>
           )}
@@ -498,29 +637,83 @@ function GroupEditor({ groups, nameOf, movePlayer, reshuffle, cfg }) {
 }
 
 /* ---------- ロビン表 ---------- */
-function RoundRobin({ groups, nameOf, getResult, setResult, standings, cfg }) {
+function RoundRobin({ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }) {
   const [open, setOpen] = useState(true);
+  const [drag, setDrag] = useState(null); // {gi,id}
+  const [over, setOver] = useState(null); // "gi:id"
   if (!groups.length) return <Empty msg="設定タブでエントリーを入力してグループに振り分けてください。" />;
+  const fillRandom = () => {
+    groups.forEach((ids, gi) => {
+      for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+        const a = Math.min(ids[i], ids[j]), b = Math.max(ids[i], ids[j]);
+        const winA = Math.random() < 0.5, lose = Math.floor(Math.random() * 2);
+        setResult(gi, a, b, { sa: winA ? 2 : lose, sb: winA ? lose : 2, winner: winA ? 'a' : 'b', playing: false });
+      }
+    });
+  };
   return (
     <div>
-      <button onClick={() => setOpen(o => !o)} className="flex items-center gap-2 text-xl font-bold mb-4">
-        ラウンドロビン
-        <span className="text-gray-400 text-base">{open ? '∧' : '∨'}</span>
-      </button>
+      <div className="flex items-center justify-between mb-2">
+        <button onClick={() => setOpen(o => !o)} className="flex items-center gap-2 text-xl font-bold">
+          ラウンドロビン
+          <span className="text-gray-400 text-base">{open ? '∧' : '∨'}</span>
+        </button>
+        {DEV_SEED && <button onClick={fillRandom} className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold rounded-lg px-3 py-1.5">🧪 全試合ランダム結果</button>}
+      </div>
       {open && (
-        <div className="space-y-6">
-          {groups.map((ids, gi) => (
-            <GroupTable key={gi} {...{ gi, ids, nameOf, getResult, setResult, standings }} />
-          ))}
-        </div>
+        <>
+          <p className="text-xs text-gray-400 mb-4">⠿ でチームを掴んで、別グループのチーム名にドロップすると<b>入れ替え</b>できます（グループをまたぐ場合、該当グループの入力済み結果はクリアされます）。</p>
+          <div className="space-y-6">
+            {groups.map((ids, gi) => (
+              <GroupTable key={gi} {...{ gi, ids, nameOf, getResult, setResult, standings, drag, setDrag, over, setOver, swapTeams, assign, setAssign, boards: cfg.boards }} />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
 }
-function GroupTable({ gi, ids, nameOf, getResult, setResult, standings }) {
+function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, setDrag, over, setOver, swapTeams, assign, setAssign, boards }) {
   const st = standings(gi);
   const rankOf = Object.fromEntries(st.map((s, i) => [s.id, i + 1]));
   const statOf = Object.fromEntries(st.map(s => [s.id, s]));
+  const rrGid = (a, b) => `rr-${gi}-${Math.min(a, b)}-${Math.max(a, b)}`;
+  const pkey = (a, b) => Math.min(a, b) + '_' + Math.max(a, b);
+  // 対戦順（①②③…）と「次の試合」
+  const sched = scheduleOrder(ids);
+  const orderMap = {}; sched.forEach(([a, b], i) => orderMap[pkey(a, b)] = i + 1);
+  let nextKey = null;
+  for (const [a, b] of sched) {
+    const r = getResult(gi, a, b);
+    const dec = r && r.winner != null;
+    const ply = r && r.playing && !dec;
+    if (!dec && !ply) { nextKey = pkey(a, b); break; }
+  }
+  const markPlaying = (a, b) => setResult(gi, Math.min(a, b), Math.max(a, b), { playing: true });
+  const [edit, setEdit] = useState(null); // {a,b} 編集中の対戦
+  const editGid = edit ? rrGid(edit.a, edit.b) : null;
+  const resetMatch = () => { const a = Math.min(edit.a, edit.b), b = Math.max(edit.a, edit.b); setResult(gi, a, b, { sa: 0, sb: 0, winner: null, playing: false }); setBoard(null); };
+  const setBoard = n => setAssign(prev => {
+    const next = { ...prev };
+    Object.keys(next).forEach(k => { if (next[k] === n) delete next[k]; });
+    if (n != null) next[editGid] = n; else delete next[editGid];
+    return next;
+  });
+  const editRes = edit ? getResult(gi, edit.a, edit.b) : null;
+  const legOf = id => { if (!editRes) return 0; return editRes.a === id ? editRes.sa : editRes.sb; };
+  const setLeg = (id, v) => {
+    v = Math.max(0, v);
+    const a = Math.min(edit.a, edit.b), b = Math.max(edit.a, edit.b);
+    const cur = getResult(gi, a, b) || { a, b, sa: 0, sb: 0, winner: null };
+    let sa = cur.sa, sb = cur.sb;
+    if (id === a) sa = v; else sb = v;
+    setResult(gi, a, b, { sa, sb, winner: sa === sb ? null : (sa > sb ? 'a' : 'b') });
+  };
+  const clearEdit = () => { const a = Math.min(edit.a, edit.b), b = Math.max(edit.a, edit.b); setResult(gi, a, b, { sa: 0, sb: 0, winner: null }); };
+  const winnerId = editRes && editRes.winner != null ? (editRes.winner === 'a' ? editRes.a : editRes.b) : null;
+  const eOrd = edit ? orderMap[pkey(edit.a, edit.b)] : null;
+  const eStatus = editRes && editRes.winner != null ? '終了' : (editRes && editRes.playing ? '試合中' : '予定');
+  const eStatusCls = eStatus === '終了' ? 'bg-gray-100 text-gray-600' : (eStatus === '試合中' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700');
 
   return (
     <div>
@@ -530,7 +723,7 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings }) {
           <thead>
             <tr className="border-b border-gray-300">
               <th className="py-2.5 px-2 w-8"></th>
-              <th className="py-2.5 px-2 text-left font-bold min-w-[140px]">名前</th>
+              <th className="py-2.5 px-2 text-left font-bold w-44">名前</th>
               {ids.map((_, c) => <th key={c} className="py-2.5 px-2 w-16 text-center font-bold">{c + 1}</th>)}
               <th className="py-2.5 px-2 w-16 text-center font-bold border-l border-gray-200">勝敗</th>
               <th className="py-2.5 px-2 w-16 text-center font-bold">Legs</th>
@@ -540,10 +733,22 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings }) {
           <tbody>
             {ids.map((rid, r) => {
               const s = statOf[rid] || { w: 0, l: 0, lf: 0, la: 0 };
+              const dragged = drag && drag.gi === gi && drag.id === rid;
+              const hovered = over === gi + ':' + rid;
               return (
-                <tr key={rid} className="border-b border-gray-100 last:border-0">
+                <tr key={rid} className={`border-b border-gray-100 last:border-0 ${dragged ? 'opacity-40' : ''}`}>
                   <td className="py-2 px-2 text-center text-gray-400">{r + 1}</td>
-                  <td className="py-2 px-2 font-medium whitespace-nowrap">{nameOf(rid)}</td>
+                  <td className={`py-2 px-2 align-top group ${hovered ? 'bg-amber-50 ring-2 ring-amber-200' : ''}`}
+                    onDragOver={e => { if (drag) { e.preventDefault(); setOver(gi + ':' + rid); } }}
+                    onDragLeave={() => setOver(o => o === gi + ':' + rid ? null : o)}
+                    onDrop={e => { e.preventDefault(); if (drag) swapTeams(drag.gi, drag.id, gi, rid); setDrag(null); setOver(null); }}>
+                    <div className="w-44 font-medium leading-snug">
+                      <span draggable onDragStart={() => setDrag({ gi, id: rid })} onDragEnd={() => { setDrag(null); setOver(null); }}
+                        title="ドラッグで入れ替え"
+                        className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-600 mr-1 select-none opacity-0 group-hover:opacity-100 transition">⠿</span>
+                      {nameOf(rid)}
+                    </div>
+                  </td>
                   {ids.map((cid, c) => {
                     if (rid === cid) return <td key={cid} className="bg-gray-100"></td>;
                     const res = getResult(gi, rid, cid);
@@ -551,27 +756,22 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings }) {
                     const myLeg = res ? (iAmA ? res.sa : res.sb) : 0;
                     const opLeg = res ? (iAmA ? res.sb : res.sa) : 0;
                     const decided = res && res.winner != null;
-                    if (c > r) {
-                      const setLeg = (who, v) => {
-                        v = Math.max(0, +v || 0);
-                        const nMy = who === 'my' ? v : myLeg, nOp = who === 'op' ? v : opLeg;
-                        const a = Math.min(rid, cid), b = Math.max(rid, cid);
-                        const aLeg = a === rid ? nMy : nOp, bLeg = b === rid ? nMy : nOp;
-                        setResult(gi, a, b, { sa: aLeg, sb: bLeg, winner: aLeg === bLeg ? null : (aLeg > bLeg ? 'a' : 'b') });
-                      };
-                      return (
-                        <td key={cid} className="text-center">
-                          <div className="flex items-center justify-center gap-0.5">
-                            <input type="number" value={myLeg || ''} onChange={e => setLeg('my', e.target.value)}
-                              className="w-6 text-center tabular-nums bg-transparent rounded hover:bg-gray-100 focus:bg-gray-100 focus:outline-none py-1" placeholder="-" />
-                            <span className="text-gray-400">-</span>
-                            <input type="number" value={opLeg || ''} onChange={e => setLeg('op', e.target.value)}
-                              className="w-6 text-center tabular-nums bg-transparent rounded hover:bg-gray-100 focus:bg-gray-100 focus:outline-none py-1" placeholder="-" />
-                          </div>
-                        </td>
-                      );
-                    }
-                    return <td key={cid} className="text-center tabular-nums text-gray-500">{decided ? `${myLeg} - ${opLeg}` : ''}</td>;
+                    const playing = res && res.playing && !decided;
+                    const win = decided && ((res.winner === 'a') === iAmA);
+                    const key = pkey(rid, cid), ord = orderMap[key], isNext = key === nextKey;
+                    const boardN = assign[rrGid(rid, cid)];
+                    let inner, cls = '', style = {};
+                    if (decided) { inner = `${myLeg} - ${opLeg}`; cls = win ? 'bg-emerald-50 text-emerald-700 font-semibold' : 'text-gray-500'; }
+                    else if (playing) { inner = <span className="text-orange-600 font-bold text-xs">試合中</span>; cls = 'bg-orange-50'; }
+                    else { inner = <span className={`font-bold ${isNext ? 'text-white' : 'text-gray-400'}`}>{circled(ord)}</span>; cls = isNext ? 'bg-blue-500' : ''; }
+                    return (
+                      <td key={cid} onClick={() => { if (decided || playing) setEdit({ a: rid, b: cid }); else markPlaying(rid, cid); }}
+                        style={style}
+                        className={`text-center text-base tabular-nums cursor-pointer hover:brightness-95 ${cls}`}>
+                        {inner}
+                        {boardN && !decided && <div className="text-[10px] text-blue-700 font-bold leading-none mt-0.5">{boardN}番台</div>}
+                      </td>
+                    );
                   })}
                   <td className="py-2 px-2 text-center tabular-nums border-l border-gray-200">{s.w} - {s.l}</td>
                   <td className="py-2 px-2 text-center tabular-nums text-gray-600">{s.lf} - {s.la}</td>
@@ -582,6 +782,50 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings }) {
           </tbody>
         </table>
       </div>
+
+      {edit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setEdit(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xs p-5" onClick={e => e.stopPropagation()}>
+            <div className="text-center mb-4">
+              <span className="text-xs text-gray-500">グループ {GMARK[gi]} ・ {circled(eOrd)}試合 </span>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${eStatusCls}`}>{eStatus}</span>
+            </div>
+            {[edit.a, edit.b].map(id => {
+              const isWin = winnerId === id;
+              const legs = legOf(id);
+              return (
+                <div key={id} className={`flex items-center gap-2 rounded-xl px-3 py-2 mb-2 ${isWin ? 'bg-emerald-50' : 'bg-gray-50'}`}>
+                  <span className={`text-sm flex-1 leading-snug ${isWin ? 'font-bold text-emerald-700' : 'text-gray-800'}`}>{nameOf(id)}</span>
+                  <button onClick={() => setLeg(id, legs - 1)} className="w-9 h-9 rounded-lg bg-white border border-gray-300 text-xl leading-none active:bg-gray-100">−</button>
+                  <span className="w-7 text-center text-2xl font-bold tabular-nums">{legs}</span>
+                  <button onClick={() => setLeg(id, legs + 1)} className="w-9 h-9 rounded-lg bg-white border border-gray-300 text-xl leading-none active:bg-gray-100">＋</button>
+                </div>
+              );
+            })}
+            <div className="mt-4">
+              <div className="text-xs text-gray-500 mb-1.5">試合台（ボード）</div>
+              <div className="flex flex-wrap gap-1.5">
+                <button onClick={() => setBoard(null)} className={`px-3 py-1.5 rounded-lg text-sm border ${assign[editGid] == null ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-300 text-gray-600'}`}>未割当</button>
+                {Array.from({ length: boards }, (_, i) => i + 1).map(n => {
+                  const cur = assign[editGid] === n;
+                  const taken = Object.entries(assign).some(([k, v]) => v === n && k !== editGid);
+                  return (
+                    <button key={n} disabled={taken} onClick={() => setBoard(n)}
+                      className={`w-10 py-1.5 rounded-lg text-sm border ${cur ? 'bg-emerald-600 text-white border-emerald-600' : (taken ? 'bg-gray-100 border-gray-200 text-gray-300 line-through cursor-not-allowed' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50')}`}>
+                      {n}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-gray-400 mt-1">グレーの台は他の試合で使用中（選択不可）</p>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button onClick={resetMatch} className="flex-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm py-2.5">予定に戻す</button>
+              <button onClick={() => setEdit(null)} className="flex-1 rounded-lg bg-gray-900 hover:bg-gray-700 text-white text-sm font-bold py-2.5">閉じる</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -642,37 +886,88 @@ function BracketTab({ kind, title, groups, standings, nameOf, brk, setBrk, cfg, 
         <h2 className="text-lg font-bold">{title}</h2>
         <button onClick={gen} className="text-xs text-gray-500 hover:text-gray-800 underline">組み直し</button>
       </div>
-      <div className="overflow-x-auto scroll-x pb-3">
-        <div className="flex gap-6 min-w-min">
-          {b.rounds.map((round, ri) => (
-            <div key={ri} className="flex flex-col justify-around gap-3 min-w-[210px]">
-              <div className="text-xs text-gray-400 text-center mb-1">{ri === b.rounds.length - 1 ? '決勝' : ri === b.rounds.length - 2 ? '準決勝' : `${round.length * 2}`}</div>
+      <BracketView b={b} nameOf={nameOf} setWinner={setWinner} setScore={setScore} />
+    </div>
+  );
+}
+
+// ブラケット描画＋結果入力（共通部品）。明るいカード／全試合に名前／○で勝者・勝者は赤線。
+function BracketView({ b, nameOf, setWinner }) {
+  return (
+    <div className="overflow-x-auto scroll-x pb-3">
+      <div className="bk">
+        {b.rounds.map((round, ri) => (
+          <div key={ri} className="bk-round">
+            <div className="bk-label">{ri === b.rounds.length - 1 ? '決勝' : ri === b.rounds.length - 2 ? '準決勝' : `${round.length * 2}チーム`}</div>
+            <div className="bk-body">
               {round.map(m => {
                 const aId = resolveSlot(b, m.a), bId = resolveSlot(b, m.b);
                 const win = matchWinner(b, m);
-                const Slot = ({ id, side, score }) => {
+                const decided = win && win !== 'BYE';
+                const adv = ri > 0 && ((aId && aId !== 'BYE') || (bId && bId !== 'BYE'));
+                const slot = (id, side) => {
                   const real = id && id !== 'BYE';
+                  const isWin = real && win === id;
                   return (
-                    <div className={`flex items-center justify-between gap-2 px-2 py-1 rounded ${win === id && real ? 'bg-emerald-100' : ''}`}>
-                      <button disabled={!real} onClick={() => setWinner(m.id, side)}
-                        className={`text-sm truncate text-left flex-1 ${real ? (win === id ? 'text-emerald-800 font-semibold' : 'text-gray-800 hover:text-emerald-700') : 'text-gray-400'}`}>
-                        {id === 'BYE' ? '― BYE ―' : (real ? nameOf(id) : '勝者待ち')}
-                      </button>
-                      {real && <input type="number" value={score} onChange={e => setScore(m.id, side === 'a' ? 'sa' : 'sb', +e.target.value)} className="w-8 bg-gray-50 border border-gray-300 rounded text-center text-xs py-0.5" />}
-                    </div>
+                    <button disabled={!real} onClick={() => setWinner(m.id, win === id ? null : side)}
+                      className={`bk-slot w-full flex items-center gap-1.5 px-2 py-1.5 text-sm text-left ${isWin ? 'bk-slot-win bg-emerald-50 text-emerald-700 font-bold' : (real ? 'text-gray-800 hover:bg-gray-50' : 'text-gray-400')}`}>
+                      <span className={`shrink-0 font-bold ${isWin ? 'text-emerald-500' : 'text-transparent'}`}>○</span>
+                      <span className="truncate">{id === 'BYE' ? '― BYE ―' : (real ? nameOf(id) : '勝者待ち')}</span>
+                    </button>
                   );
                 };
                 return (
-                  <div key={m.id} className="bg-white border border-gray-300 rounded-lg p-1.5 shadow-sm">
-                    <Slot id={aId} side="a" score={m.sa} />
-                    <div className="border-t border-gray-200 my-0.5" />
-                    <Slot id={bId} side="b" score={m.sb} />
+                  <div key={m.id} className={`bk-mg ${decided ? 'bk-mg-out' : ''} ${adv ? 'bk-mg-adv' : ''}`}>
+                    <div className="bk-card">
+                      {slot(aId, 'a')}
+                      {slot(bId, 'b')}
+                    </div>
                   </div>
                 );
               })}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 決勝＋ルーザーを1画面に。ロビン終了で自動作成。
+function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult }) {
+  let remaining = 0;
+  groups.forEach((ids, gi) => { for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const r = getResult(gi, ids[i], ids[j]); if (!r || r.winner == null) remaining++; } });
+  const rrComplete = groups.length > 0 && remaining === 0;
+  const seedsFor = kind => {
+    const sts = groups.map((_, gi) => standings(gi));
+    const seeds = [], adv = advanceFor(cfg.groups);
+    if (kind === 'winners') { for (let r = 0; r < adv; r++) sts.forEach(s => { if (s[r]) seeds.push(s[r].id); }); }
+    else { const maxLen = Math.max(0, ...sts.map(s => s.length)); for (let r = adv; r < maxLen; r++) sts.forEach(s => { if (s[r]) seeds.push(s[r].id); }); }
+    return seeds;
+  };
+  useEffect(() => {
+    if (!rrComplete) return;
+    if (!brk.winners || !brk.losers) setBrk(prev => ({ ...prev, winners: prev.winners || buildBracket(seedsFor('winners')), losers: prev.losers || buildBracket(seedsFor('losers')) }));
+  }, [rrComplete]);
+  const mkSetWinner = kind => (mid, side) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); findMatch(nb, mid).winner = side; return { ...prev, [kind]: nb }; });
+  const mkSetScore = kind => (mid, key, v) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); const m = findMatch(nb, mid); m[key] = Math.max(0, v); if (m.sa !== m.sb) m.winner = m.sa > m.sb ? 'a' : 'b'; return { ...prev, [kind]: nb }; });
+  const regen = () => { if (!confirm('現在のトーナメントを破棄して、今の順位で作り直しますか？')) return; setBrk(prev => ({ ...prev, winners: buildBracket(seedsFor('winners')), losers: buildBracket(seedsFor('losers')) })); };
+
+  if (!groups.length) return <Empty msg="先にエントリーしてグループに振り分けてください。" />;
+  if (!brk.winners && !brk.losers) return <Empty msg={`ラウンドロビンが終わると自動でトーナメントを作成します（残り ${remaining} 試合）。`} />;
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold">トーナメント <span className="text-xs font-normal text-gray-400">（各組上位{advanceFor(cfg.groups)}→決勝 / 残り→ルーザー）</span></h2>
+        <button onClick={regen} className="text-xs text-gray-500 hover:text-gray-800 underline">今の順位で組み直し</button>
+      </div>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
+        <div className="text-sm font-bold text-emerald-700 mb-2">🏆 決勝トーナメント</div>
+        {brk.winners ? <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setScore={mkSetScore('winners')} /> : <p className="text-sm text-gray-400">作成待ち</p>}
+      </div>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
+        <div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div>
+        {brk.losers ? <BracketView b={brk.losers} nameOf={nameOf} setWinner={mkSetWinner('losers')} setScore={mkSetScore('losers')} /> : <p className="text-sm text-gray-400">作成待ち</p>}
       </div>
     </div>
   );
@@ -684,7 +979,7 @@ function Boards({ cfg, groups, nameOf, getResult, brk, assign, setAssign }) {
   groups.forEach((ids, gi) => {
     for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
       const r = getResult(gi, ids[i], ids[j]);
-      if (!r || r.winner == null) ready.push({ gid: `rr-${gi}-${ids[i]}-${ids[j]}`, label: `グループ${GMARK[gi]}`, a: ids[i], b: ids[j] });
+      if (!r || r.winner == null) ready.push({ gid: `rr-${gi}-${Math.min(ids[i], ids[j])}-${Math.max(ids[i], ids[j])}`, label: `グループ${GMARK[gi]}`, a: ids[i], b: ids[j] });
     }
   });
   ['winners', 'losers', 'singles'].forEach(kind => {
