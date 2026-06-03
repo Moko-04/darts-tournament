@@ -26,7 +26,7 @@
   .bk-card .bk-slot:nth-child(1)::after { content:''; position:absolute; left:100%; top:50%; width:12px; height:50%; border-top:2px solid #cbd5e1; border-right:2px solid #cbd5e1; }
   .bk-card .bk-slot:nth-child(2)::after { content:''; position:absolute; left:100%; bottom:50%; width:12px; height:50%; border-bottom:2px solid #cbd5e1; border-right:2px solid #cbd5e1; }
   /* カード中央 → 次の試合へ（ペアを縦線で合流） */
-  .bk-round:not(:last-child) .bk-mg::after { content:''; position:absolute; right:-22px; width:22px; }
+  .bk-round:not(:last-child) .bk-mg::after { content:''; position:absolute; left:calc(100% + 12px); width:10px; }
   .bk-round:not(:last-child) .bk-mg:nth-child(odd)::after { top:50%; height:50%; border-top:2px solid #cbd5e1; border-right:2px solid #cbd5e1; }
   .bk-round:not(:last-child) .bk-mg:nth-child(even)::after { bottom:50%; height:50%; border-bottom:2px solid #cbd5e1; border-right:2px solid #cbd5e1; }
   .bk-round:not(:first-child) .bk-mg::before { content:''; position:absolute; left:-22px; top:calc(50% - 1px); width:22px; height:2px; background:#cbd5e1; }
