@@ -13,6 +13,8 @@
   input[type=number]::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
   .scroll-x::-webkit-scrollbar{ height:8px; } .scroll-x::-webkit-scrollbar-thumb{ background:#cbd5e1; border-radius:4px; }
   .chip-drag { opacity:.4; }
+  /* ロビン表の罫線（マス目） */
+  .rr-grid th, .rr-grid td { border:1px solid #e5e7eb; }
   /* トーナメント（コンパクトなカード＋連結線） */
   .bk { display:flex; align-items:stretch; gap:44px; padding:4px 0; }
   .bk-round { display:flex; flex-direction:column; min-width:160px; }
@@ -170,7 +172,6 @@ const TABS = [
   ['rr', 'ロビン表'],
   ['tournament', 'トーナメント'],
   ['singles', 'シングルス'],
-  ['boards', 'ボード状況'],
 ];
 
 function App() {
@@ -329,7 +330,6 @@ function App() {
       {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }} />}
       {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult }} />}
       {tab === 'singles' && <BracketTab kind="singles" title="シングルス（当日募集）" {...{ nameOf, brk, setBrk, singlesNames, setSinglesNames }} />}
-      {tab === 'boards' && <Boards {...{ cfg, groups, nameOf, getResult, brk, assign, setAssign }} />}
     </div>
   );
 }
@@ -719,7 +719,7 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
     <div>
       <div className="text-sm font-bold text-gray-700 mb-1.5">グループ {GMARK[gi]}</div>
       <div className="overflow-x-auto scroll-x rounded-xl border border-gray-300 shadow-sm bg-white">
-        <table className="w-full text-sm border-collapse">
+        <table className="rr-grid w-full text-sm border-collapse">
           <thead>
             <tr className="border-b border-gray-300">
               <th className="py-2.5 px-2 w-8"></th>
