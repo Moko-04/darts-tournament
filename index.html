@@ -47,7 +47,7 @@ const { useState, useEffect } = React;
 /* ---------- 永続化 ---------- */
 const load = (k, d) => { try { const v = localStorage.getItem('darts_'+k); return v ? JSON.parse(v) : d; } catch { return d; } };
 const save = (k, v) => { try { localStorage.setItem('darts_'+k, JSON.stringify(v)); } catch {} };
-const STATE_KEYS = ['cfg', 'pairs', 'singles', 'teams', 'groups', 'rr', 'brk', 'assign', 'singlesNames'];
+const STATE_KEYS = ['mode', 'cfg', 'pairs', 'singles', 'sNames', 'dbl', 'sgl'];
 function exportData() {
   const data = { _app: 'darts-tournament', _v: 1 };
   STATE_KEYS.forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) data[k] = JSON.parse(v); });
@@ -108,6 +108,7 @@ const DEV_PAIRS = [
   ['山崎', '森'], ['池田', '橋本'], ['阿部', '石川'], ['前田', '藤田'], ['後藤', '小川'],
   ['岡田', '長谷川'], ['村上', '近藤'],
 ].map((m, i) => ({ id: 't' + (i + 1), a: m[0], b: m[1] }));
+const DEV_SINGLES = ['ユウタ', 'ハルト', 'ソウタ', 'レン', 'ミナト', 'アオイ', 'リク', 'カイ', 'ヒナタ', 'イツキ', 'ハル', 'ユイ', 'メイ', 'リコ', 'ノア', 'サナ'];
 
 /* ---------- 生成ヘルパー ---------- */
 const nextPow2 = n => { let p = 1; while (p < n) p *= 2; return p; };
@@ -163,6 +164,10 @@ function entriesToTeams(pairs, singles) {
   }
   return teams;
 }
+// シングルス: 個人名 → 1人1チーム
+function namesToTeams(names) {
+  return names.map((n, i) => ({ id: i + 1, name: (n || '').trim(), members: [(n || '').trim()] })).filter(t => t.name);
+}
 
 /* ---------- メイン ---------- */
 const TABS = [
@@ -171,36 +176,58 @@ const TABS = [
   ['groups', '組分け'],
   ['rr', 'ロビン表'],
   ['tournament', 'トーナメント'],
-  ['singles', 'シングルス'],
 ];
 
 function App() {
   const [tab, setTab] = useState('setup');
+  const [mode, setMode] = useState(load('mode', 'doubles')); // 'doubles' | 'singles'
   const [cfg, setCfg] = useState(load('cfg', { store: '', boards: 4, groups: 4 }));
-  const [pairs, setPairs] = useState(load('pairs', []));     // [{id,a,b}] 固定ペア＋確定したシングル組
+  // ダブルスのエントリー
+  const [pairs, setPairs] = useState(load('pairs', []));     // [{id,a,b}]
   const [singles, setSingles] = useState(load('singles', [])); // [name] 相方募集中
-  const [teams, setTeams] = useState(load('teams', []));
-  const [groups, setGroups] = useState(load('groups', []));
-  const [rr, setRr] = useState(load('rr', {}));
-  const [brk, setBrk] = useState(load('brk', { winners: null, losers: null, singles: null }));
-  const [assign, setAssign] = useState(load('assign', {}));
-  const [singlesNames, setSinglesNames] = useState(load('singlesNames', ''));
+  // シングルスのエントリー（個人名）
+  const [sNames, setSNames] = useState(load('sNames', []));   // [name]
+  // イベント別の本体（teams/groups/rr/brk/assign）
+  const blank = () => ({ teams: [], groups: [], rr: {}, brk: { winners: null, losers: null }, assign: {} });
+  const [dbl, setDbl] = useState(() => {
+    const saved = load('dbl', null); if (saved) return saved;
+    const t = load('teams', []); // 旧データの移行（ダブルスの本体）
+    if (t.length) { const ob = load('brk', {}) || {}; return { teams: t, groups: load('groups', []), rr: load('rr', {}), brk: { winners: ob.winners || null, losers: ob.losers || null }, assign: load('assign', {}) }; }
+    return blank();
+  });
+  const [sgl, setSgl] = useState(load('sgl', null) || blank());
 
+  useEffect(() => save('mode', mode), [mode]);
   useEffect(() => save('cfg', cfg), [cfg]);
   useEffect(() => save('pairs', pairs), [pairs]);
   useEffect(() => save('singles', singles), [singles]);
-  useEffect(() => save('teams', teams), [teams]);
-  useEffect(() => save('groups', groups), [groups]);
-  useEffect(() => save('rr', rr), [rr]);
-  useEffect(() => save('brk', brk), [brk]);
-  useEffect(() => save('assign', assign), [assign]);
-  useEffect(() => save('singlesNames', singlesNames), [singlesNames]);
+  useEffect(() => save('sNames', sNames), [sNames]);
+  useEffect(() => save('dbl', dbl), [dbl]);
+  useEffect(() => save('sgl', sgl), [sgl]);
 
-  // 開発用: データが空なら17組のテストデータを自動投入（完成までの仮）
-  useEffect(() => { if (DEV_SEED && pairs.length === 0 && teams.length === 0) setPairs(DEV_PAIRS); }, []);
+  // アクティブなイベントの本体＋セッター（モードで切替）
+  const ev = mode === 'doubles' ? dbl : sgl;
+  const setEv = mode === 'doubles' ? setDbl : setSgl;
+  const upd = (key, val) => setEv(e => ({ ...e, [key]: typeof val === 'function' ? val(e[key]) : val }));
+  const teams = ev.teams, groups = ev.groups, rr = ev.rr, brk = ev.brk, assign = ev.assign;
+  const setTeams = v => upd('teams', v), setGroups = v => upd('groups', v), setRr = v => upd('rr', v), setBrk = v => upd('brk', v), setAssign = v => upd('assign', v);
+  const isS = mode === 'singles', unit = isS ? '人' : 'チーム';
+
+  // 開発用: ダブルスが空なら17組／シングルスが空なら個人名を自動投入
+  useEffect(() => {
+    if (!DEV_SEED) return;
+    if (pairs.length === 0 && dbl.teams.length === 0) setPairs(DEV_PAIRS);
+    if (sNames.length === 0 && sgl.teams.length === 0) setSNames(DEV_SINGLES);
+  }, []);
   function loadTestData() {
-    if ((pairs.length || teams.length) && !confirm('現在のデータを破棄して17組のテストデータを投入します。よろしいですか？')) return;
-    setPairs(DEV_PAIRS); setSingles([]); setTeams([]); setGroups([]); setRr({}); setBrk({ winners: null, losers: null, singles: null }); setAssign({}); setTab('entry');
+    if (mode === 'doubles') {
+      if ((pairs.length || teams.length) && !confirm('現在のダブルスデータを破棄して17組を投入します。よろしいですか？')) return;
+      setPairs(DEV_PAIRS); setSingles([]); setDbl(blank());
+    } else {
+      if ((sNames.length || teams.length) && !confirm('現在のシングルスデータを破棄してテスト名簿を投入します。よろしいですか？')) return;
+      setSNames(DEV_SINGLES); setSgl(blank());
+    }
+    setTab('entry');
   }
 
   const nameOf = id => { const t = teams.find(t => t.id === id); if (t) return (t.members && t.members.length ? t.members.join('・') : t.name); return typeof id === 'string' ? id : '?'; };
@@ -212,15 +239,15 @@ function App() {
     return gs;
   };
   function generate() {
-    const ts = entriesToTeams(pairs, singles);
-    if (ts.length < 2) { alert('2チーム以上のエントリーが必要です。'); return; }
+    const ts = isS ? namesToTeams(sNames) : entriesToTeams(pairs, singles);
+    if (ts.length < 2) { alert(`2${unit}以上のエントリーが必要です。`); return; }
     if (ts.length < cfg.groups * 2) {
       const maxG = Math.floor(ts.length / 2);
-      alert(`${cfg.groups}グループには最低${cfg.groups * 2}チーム必要です（各組2チーム以上・ダブルスは2名で1チーム）。\n現在 ${ts.length}チーム。グループ数を ${maxG} 以下にするか、チームを追加してください。`);
+      alert(`${cfg.groups}グループには最低${cfg.groups * 2}${unit}必要です（各組2${unit}以上）。\n現在 ${ts.length}${unit}。グループ数を ${maxG} 以下にするか、追加してください。`);
       return;
     }
     setTeams(ts); setGroups(distribute(ts, cfg.groups));
-    setRr({}); setBrk({ winners: null, losers: null, singles: brk.singles }); setAssign({});
+    setRr({}); setBrk({ winners: null, losers: null }); setAssign({});
     setTab('groups');
   }
   function reshuffle() {
@@ -232,7 +259,7 @@ function App() {
     const hasResults = rr && Object.keys(rr).length > 0;
     if (teams.length && hasResults && !confirm('グループ数を変えると入力済みのロビン結果は消え、再振り分けされます。よろしいですか？')) return;
     setCfg({ ...cfg, groups: v });
-    if (teams.length) { setGroups(distribute(teams, v)); setRr({}); setBrk({ winners: null, losers: null, singles: brk.singles }); setAssign({}); }
+    if (teams.length) { setGroups(distribute(teams, v)); setRr({}); setBrk({ winners: null, losers: null }); setAssign({}); }
   }
   const movePlayer = (id, from, to) => { if (from === to) return; setGroups(gs => { const n = gs.map(a => a.slice()); n[from] = n[from].filter(x => x !== id); n[to].push(id); return n; }); };
   // ロビン表/組分けでチーム同士を入れ替え（グループをまたぐ場合は該当グループの結果をクリア）
@@ -246,12 +273,12 @@ function App() {
     setGroups(gs => gs.map(arr => arr.map(id => id === idA ? idB : (id === idB ? idA : id))));
     if (cross) {
       setRr(prev => { const n = { ...prev }; delete n[giA]; delete n[giB]; return n; });
-      setBrk({ winners: null, losers: null, singles: brk.singles }); setAssign({});
+      setBrk({ winners: null, losers: null }); setAssign({});
     }
   }
   function resetAll() {
-    if (!confirm('全データを消去します。よろしいですか？')) return;
-    setTeams([]); setGroups([]); setRr({}); setBrk({ winners: null, losers: null, singles: null }); setAssign({}); setPairs([]); setSingles([]); setSinglesNames(''); setTab('setup');
+    if (!confirm('全データ（ダブルス・シングルス両方）を消去します。よろしいですか？')) return;
+    setPairs([]); setSingles([]); setSNames([]); setDbl(blank()); setSgl(blank()); setTab('setup');
   }
 
   function setResult(gi, a, b, patch) {
@@ -303,10 +330,17 @@ function App() {
     <div className="min-h-screen max-w-6xl mx-auto px-4 pb-24">
       <header className="py-4 flex items-center gap-3 flex-wrap">
         <span className="text-2xl">🎯</span>
-        <h1 className="text-lg font-bold tracking-tight">ハウストーナメント運営 <span className="text-sm font-normal text-gray-400">ダブルス</span></h1>
+        <h1 className="text-lg font-bold tracking-tight">ハウストーナメント運営</h1>
         {cfg.store && <span className="px-2 py-0.5 rounded bg-gray-200 text-sm text-gray-700">{cfg.store}</span>}
-        {teams.length > 0 && <span className="text-sm text-gray-400">{teams.length}チーム / {groups.length}グループ / {cfg.boards}台</span>}
+        {teams.length > 0 && <span className="text-sm text-gray-400">{teams.length}{unit} / {groups.length}グループ / {cfg.boards}台</span>}
       </header>
+
+      <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-min">
+        {[['doubles', 'ダブルス'], ['singles', 'シングルス']].map(([k, l]) => (
+          <button key={k} onClick={() => setMode(k)}
+            className={`px-5 py-1.5 rounded-md text-sm font-bold whitespace-nowrap transition ${mode === k ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>{l}</button>
+        ))}
+      </div>
 
       <nav className="flex gap-5 overflow-x-auto scroll-x border-b border-gray-200 mb-6">
         {TABS.map(([k, label]) => (
@@ -324,18 +358,19 @@ function App() {
         </div>
       )}
 
-      {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData }} />}
-      {tab === 'entry' && <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg }} />}
-      {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg }} />}
+      {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode }} />}
+      {tab === 'entry' && (isS
+        ? <SinglesEntry {...{ sNames, setSNames, generate, cfg }} />
+        : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg }} />)}
+      {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg, unit }} />}
       {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }} />}
       {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult }} />}
-      {tab === 'singles' && <BracketTab kind="singles" title="シングルス（当日募集）" {...{ nameOf, brk, setBrk, singlesNames, setSinglesNames }} />}
     </div>
   );
 }
 
 /* ---------- 設定 ---------- */
-function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData }) {
+function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode }) {
   const Step = ({ label, val, set, min, max, hint }) => (
     <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
       <div className="text-sm text-gray-500 mb-2">{label}</div>
@@ -387,8 +422,8 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
       </div>
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
-        <div className="text-sm text-amber-800">🧪 開発用テストデータ（17組／34名）<span className="text-amber-600 text-xs ml-1">※完成時に外します</span></div>
-        <button onClick={loadTestData} className="bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg px-4 py-2 whitespace-nowrap">17組を投入（やり直し）</button>
+        <div className="text-sm text-amber-800">🧪 開発用テストデータ（{mode === 'singles' ? 'シングルス16名' : 'ダブルス17組'}）<span className="text-amber-600 text-xs ml-1">※完成時に外します</span></div>
+        <button onClick={loadTestData} className="bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg px-4 py-2 whitespace-nowrap">{mode === 'singles' ? '16名' : '17組'}を投入（やり直し）</button>
       </div>
 
       {teams.length > 0 && (
@@ -594,6 +629,46 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
         <button onClick={generate} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-lg px-6 py-2.5">グループに振り分け →</button>
       </div>
       <p className="text-xs text-gray-400">※ 「振り分け」時、ペア枠に残ったシングルや未ペアのシングルは自動でペアに組み合わせます。{cfg.groups}グループへランダム配置 →「組分け」で手動調整。</p>
+    </div>
+  );
+}
+
+/* ---------- シングルス エントリー（個人名） ---------- */
+function SinglesEntry({ sNames, setSNames, generate, cfg }) {
+  const [text, setText] = useState('');
+  const add = () => { const arr = text.split(/[\n,，、]/).map(s => s.trim()).filter(Boolean); if (arr.length) setSNames([...sNames, ...arr]); setText(''); };
+  const remove = i => setSNames(sNames.filter((_, k) => k !== i));
+  return (
+    <div className="space-y-5">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="font-bold">シングルス エントリー <span className="text-sm font-normal text-gray-400">（個人戦）</span></h2>
+          <span className="text-xs text-gray-400">{sNames.length}名</span>
+        </div>
+        <div className="p-4 space-y-3">
+          <div className="flex gap-2">
+            <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }}
+              placeholder="名前を入力して Enter（改行・カンマで複数まとめて貼付も可）"
+              className="flex-1 bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            <button onClick={add} className="bg-gray-900 hover:bg-gray-700 text-white text-sm font-bold rounded-lg px-5">追加</button>
+          </div>
+          {sNames.length === 0 ? <p className="text-sm text-gray-300">まだいません</p> : (
+            <div className="flex flex-wrap gap-2">
+              {sNames.map((n, i) => (
+                <span key={i} className="inline-flex items-center gap-1 text-sm px-2.5 py-1 rounded-full bg-gray-100 border border-gray-200 text-gray-800">
+                  <span className="text-gray-400">{i + 1}.</span>{n}
+                  <button onClick={() => remove(i)} className="text-gray-400 hover:text-red-500">×</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center justify-between gap-3 flex-wrap">
+        <span className="text-sm text-gray-600">参加者 <b className="text-lg text-gray-900">{sNames.length}</b>名</span>
+        <button onClick={generate} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-lg px-6 py-2.5">グループに振り分け →</button>
+      </div>
+      <p className="text-xs text-gray-400">※ {cfg.groups}グループにランダム配置 →「組分け」で手動調整。各組上位{advanceFor(cfg.groups)}人が決勝、残りがルーザー。</p>
     </div>
   );
 }
