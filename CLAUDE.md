@@ -53,7 +53,7 @@
 - ⚠️ クライアントに置くのは **publishable(anon) 公開キーのみ**。`service_role`（秘密）キーは絶対にコードに貼らない（データはRLSで保護）。
 - テーブル `public.app_state(user_id uuid pk, data jsonb, updated_at)` ＋ RLS（自分の行のみ）。SQLは repo の **`supabase-setup.sql`**。
 - `cloudLoad(uid)` = ローカルクリア後に自分のdataを反映 / `cloudSave(uid)` = `STATE_KEYS` をJSONでupsert（変更を1.5秒デバウンス）。`Root`(認証ラッパー) / `Login` / `Splash` コンポーネント。ヘッダーにメール表示＋ログアウト。
-- **アクセスは承認制（自己登録なし）**: `Login` はログイン専用UI（signUp廃止）。発行依頼は `Login` 内の `RequestForm`（アプリ内フォーム）→ **FormSubmit**（`https://formsubmit.co/ajax/${ADMIN_EMAIL}`・登録不要）で `ADMIN_EMAIL` 宛にメール送信。**初回送信時にFormSubmitの有効化メールが届くので1回クリックして有効化**（以降は届く）。送信失敗時は同フォーム内の mailto フォールバックあり。オーナーが **Supabase ダッシュボードでユーザーを手動作成**（Authentication → Users → Add user → **Auto Confirm User** でメール送信不要＝メール上限も回避）。**Supabase側で公開サインアップもOFF**にすること（Authentication → Sign In/Providers の「Allow new users to sign up」）。
+- **アクセスは承認制（自己登録なし）**: `Login` はログイン専用UI（signUp廃止）。発行依頼は「アカウント発行を依頼する（フォーム）」リンク → **Googleフォーム** `ACCOUNT_REQUEST_URL`（オーナーのGoogleアカウントで作成、回答→メール通知ON、「リンクを知っている全員」可）。`ACCOUNT_REQUEST_URL` が空なら `ADMIN_EMAIL` への mailto にフォールバック。フォーム編集は当該Googleアカウントの Forms から（質問: お名前必須/連絡先メール必須/店舗名任意）。オーナーが **Supabase ダッシュボードでユーザーを手動作成**（Authentication → Users → Add user → **Auto Confirm User** でメール送信不要＝メール上限も回避）。**Supabase側で公開サインアップもOFF**にすること（Authentication → Sign In/Providers の「Allow new users to sign up」）。
 - **テストアカウント**: `t_suzuki@dart-ace.com`（メール確認済）。**パスワードはリポジトリに置かない**（オーナーのパスワードマネージャーで管理）。Supabaseは「Confirm email」ON。
 - `STATE_KEYS = [mode, cfg, pairs, singles, sNames, dbl, sgl]`（export/import JSON もこのキー）。
 
