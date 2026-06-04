@@ -57,7 +57,7 @@ const SUPABASE_URL = 'https://kzbqaotpoxoycrzsywqt.supabase.co';
 const SUPABASE_ANON = 'sb_publishable_4ONM5b8LqxLos5BmA_8pZw_7tnYpFc_'; // publishable(公開)キー
 const AUTH_ENABLED = /^https?:\/\//.test(SUPABASE_URL) && SUPABASE_ANON.length > 20;
 const supa = AUTH_ENABLED && window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON) : null;
-const ADMIN_EMAIL = 't_suzuki@dart-ace.com'; // アカウント発行依頼の送り先。自己登録は不可・管理者がSupabaseで手動発行する運用。
+const ADMIN_EMAIL = 't_suzuki@dart-ace.com'; // アカウント発行依頼の送り先。自己登録は不可・管理者がSupabaseで手動発行。FormSubmitの宛先＋mailtoフォールバックに使用。
 
 /* ---------- 永続化 ---------- */
 const load = (k, d) => { try { const v = localStorage.getItem('darts_'+k); return v ? JSON.parse(v) : d; } catch { return d; } };
@@ -1249,6 +1249,7 @@ function Splash({ text }) {
   return <div className="min-h-screen flex items-center justify-center text-gray-400 text-sm">{text}</div>;
 }
 function Login() {
+  const [mode, setMode] = useState('login'); // 'login' | 'request'
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1259,8 +1260,7 @@ function Login() {
     setBusy(false);
     if (r.error) setMsg(r.error.message);
   };
-  // 自己登録は不可。アカウントは管理者がSupabaseで手動発行する運用 → 発行依頼はメールで。
-  const mailto = `mailto:${ADMIN_EMAIL}?subject=${encodeURIComponent('ダーツ運営アプリ アカウント発行依頼')}&body=${encodeURIComponent('店舗名 / お名前 / ログインに使うメールアドレス をご記入ください。')}`;
+  if (mode === 'request') return <RequestForm onBack={() => setMode('login')} />;
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <form onSubmit={submit} className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 w-full max-w-sm space-y-4">
@@ -1279,7 +1279,74 @@ function Login() {
         </button>
         <div className="pt-3 border-t border-gray-100 text-center space-y-1">
           <p className="text-xs text-gray-400">アカウントは管理者が発行します（自己登録はできません）。</p>
-          <a href={mailto} className="inline-block text-xs text-blue-600 hover:text-blue-800 underline">アカウント発行を依頼する（メール）</a>
+          <button type="button" onClick={() => setMode('request')} className="inline-block text-xs text-blue-600 hover:text-blue-800 underline">アカウント発行を依頼する</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+function RequestForm({ onBack }) {
+  const [store, setStore] = useState('');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err, setErr] = useState('');
+  const submit = async e => {
+    e.preventDefault();
+    if (!ADMIN_EMAIL) { setErr('送信先が未設定です。'); return; }
+    setBusy(true); setErr('');
+    try {
+      const res = await fetch(`https://formsubmit.co/ajax/${ADMIN_EMAIL}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          _subject: 'ダーツ運営アプリ アカウント発行依頼',
+          _template: 'table',
+          _captcha: 'false',
+          店舗名: store, お名前: name, 連絡先メール: email, メッセージ: message
+        })
+      });
+      const data = await res.json();
+      if (data.success === true || data.success === 'true') setDone(true);
+      else setErr(data.message || '送信に失敗しました。時間をおいて再度お試しください。');
+    } catch (_) { setErr('送信に失敗しました。通信状況をご確認ください。'); }
+    setBusy(false);
+  };
+  if (done) return (
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 w-full max-w-sm text-center space-y-3">
+        <div className="text-3xl">✅</div>
+        <h1 className="text-lg font-bold">送信しました</h1>
+        <p className="text-sm text-gray-600">アカウント発行の依頼を受け付けました。管理者から折り返しご連絡します。</p>
+        <button onClick={onBack} className="text-xs text-blue-600 hover:text-blue-800 underline">← ログインに戻る</button>
+      </div>
+    </div>
+  );
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <form onSubmit={submit} className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 w-full max-w-sm space-y-3">
+        <div className="text-center">
+          <div className="text-3xl mb-1">📝</div>
+          <h1 className="text-lg font-bold">アカウント発行依頼</h1>
+          <p className="text-xs text-gray-400 mt-1">管理者へ送信されます</p>
+        </div>
+        <input value={store} onChange={e => setStore(e.target.value)} placeholder="店舗名（任意）"
+          className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+        <input required value={name} onChange={e => setName(e.target.value)} placeholder="お名前"
+          className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+        <input type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="連絡先メールアドレス"
+          className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+        <textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="ご要望・連絡事項（任意）" rows={3}
+          className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+        {err && <p className="text-xs text-red-500">{err}</p>}
+        <button disabled={busy} type="submit" className="w-full bg-gray-900 hover:bg-gray-700 disabled:opacity-50 text-white font-bold rounded-lg py-2.5">
+          {busy ? '送信中…' : '送信する'}
+        </button>
+        <div className="text-center space-y-1">
+          <button type="button" onClick={onBack} className="block w-full text-xs text-gray-500 hover:text-gray-800">← ログインに戻る</button>
+          <p className="text-xs text-gray-300">うまく送れない場合は <a href={`mailto:${ADMIN_EMAIL}`} className="underline">{ADMIN_EMAIL}</a> へ直接メール</p>
         </div>
       </form>
     </div>
