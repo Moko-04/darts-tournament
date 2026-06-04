@@ -7,6 +7,7 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   body { background:#f8fafc; }
@@ -49,10 +50,32 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect } = React;
 
+/* ===== ログイン/クラウド保存（Supabase）=====
+   自社Supabaseの「Project URL」と「anon public key」を貼ると、
+   ログイン必須＋クラウド保存になります。空のままだと従来どおり（ログイン無し・ブラウザ保存）。 */
+const SUPABASE_URL = '';   // 例: https://xxxx.supabase.co
+const SUPABASE_ANON = '';  // 例: eyJhbGciOi... （anon public key）
+const AUTH_ENABLED = /^https?:\/\//.test(SUPABASE_URL) && SUPABASE_ANON.length > 20;
+const supa = AUTH_ENABLED && window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON) : null;
+
 /* ---------- 永続化 ---------- */
 const load = (k, d) => { try { const v = localStorage.getItem('darts_'+k); return v ? JSON.parse(v) : d; } catch { return d; } };
 const save = (k, v) => { try { localStorage.setItem('darts_'+k, JSON.stringify(v)); } catch {} };
 const STATE_KEYS = ['mode', 'cfg', 'pairs', 'singles', 'sNames', 'dbl', 'sgl'];
+// クラウド（Supabase）読み込み: 前のユーザーのローカルを消してから自分のデータを反映
+async function cloudLoad(userId) {
+  STATE_KEYS.forEach(k => localStorage.removeItem('darts_' + k));
+  try {
+    const { data } = await supa.from('app_state').select('data').eq('user_id', userId).maybeSingle();
+    if (data && data.data) Object.entries(data.data).forEach(([k, v]) => { try { localStorage.setItem('darts_' + k, JSON.stringify(v)); } catch {} });
+  } catch (e) { console.warn('cloudLoad', e); }
+}
+async function cloudSave(userId) {
+  const blob = {};
+  STATE_KEYS.forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) blob[k] = JSON.parse(v); });
+  try { await supa.from('app_state').upsert({ user_id: userId, data: blob, updated_at: new Date().toISOString() }); }
+  catch (e) { console.warn('cloudSave', e); }
+}
 function exportData() {
   const data = { _app: 'darts-tournament', _v: 1 };
   STATE_KEYS.forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) data[k] = JSON.parse(v); });
@@ -187,7 +210,7 @@ const TABS_S = [
   ['tournament', 'トーナメント'],
 ];
 
-function App() {
+function App({ session }) {
   const [tab, setTab] = useState('setup');
   const [mode, setMode] = useState(load('mode', 'doubles')); // 'doubles' | 'singles'
   const [cfg, setCfg] = useState(load('cfg', { store: '', boards: 8, groups: 4 }));
@@ -213,6 +236,13 @@ function App() {
   useEffect(() => save('sNames', sNames), [sNames]);
   useEffect(() => save('dbl', dbl), [dbl]);
   useEffect(() => save('sgl', sgl), [sgl]);
+
+  // クラウド保存（ログイン時のみ・変更を1.5秒デバウンスして保存）
+  useEffect(() => {
+    if (!AUTH_ENABLED || !session) return;
+    const t = setTimeout(() => cloudSave(session.user.id), 1500);
+    return () => clearTimeout(t);
+  }, [mode, cfg, pairs, singles, sNames, dbl, sgl]);
 
   // アクティブなイベントの本体＋セッター（モードで切替）
   const ev = mode === 'doubles' ? dbl : sgl;
@@ -350,6 +380,12 @@ function App() {
         <h1 className="text-lg font-bold tracking-tight">ハウストーナメント運営</h1>
         {cfg.store && <span className="px-2 py-0.5 rounded bg-gray-200 text-sm text-gray-700">{cfg.store}</span>}
         {teams.length > 0 && <span className="text-sm text-gray-400">{teams.length}{unit} / {groups.length}グループ / {cfg.boards}台</span>}
+        {AUTH_ENABLED && session && (
+          <span className="ml-auto flex items-center gap-2 text-sm">
+            <span className="text-gray-400 hidden sm:inline">{session.user.email}</span>
+            <button onClick={() => supa.auth.signOut()} className="text-gray-500 hover:text-gray-900 border border-gray-300 rounded-lg px-3 py-1">ログアウト</button>
+          </span>
+        )}
       </header>
 
       <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-min">
@@ -1194,7 +1230,67 @@ function Boards({ cfg, groups, nameOf, getResult, brk, assign, setAssign }) {
 
 function Empty({ msg }) { return <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400 text-sm shadow-sm">{msg}</div>; }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+/* ---------- ログイン画面 ---------- */
+function Splash({ text }) {
+  return <div className="min-h-screen flex items-center justify-center text-gray-400 text-sm">{text}</div>;
+}
+function Login() {
+  const [email, setEmail] = useState('');
+  const [pw, setPw] = useState('');
+  const [signup, setSignup] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const submit = async e => {
+    e.preventDefault(); setBusy(true); setMsg('');
+    const r = signup ? await supa.auth.signUp({ email, password: pw }) : await supa.auth.signInWithPassword({ email, password: pw });
+    setBusy(false);
+    if (r.error) setMsg(r.error.message);
+    else if (signup && !r.data.session) setMsg('確認メールを送信しました。メール内のリンクで認証してください。');
+  };
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <form onSubmit={submit} className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 w-full max-w-sm space-y-4">
+        <div className="text-center">
+          <div className="text-3xl mb-1">🎯</div>
+          <h1 className="text-lg font-bold">ハウストーナメント運営</h1>
+          <p className="text-xs text-gray-400 mt-1">{signup ? '新規登録' : 'ログイン'}</p>
+        </div>
+        <input type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="メールアドレス"
+          className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+        <input type="password" required value={pw} onChange={e => setPw(e.target.value)} placeholder="パスワード"
+          className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+        {msg && <p className="text-xs text-red-500">{msg}</p>}
+        <button disabled={busy} type="submit" className="w-full bg-gray-900 hover:bg-gray-700 disabled:opacity-50 text-white font-bold rounded-lg py-2.5">
+          {busy ? '…' : (signup ? '登録する' : 'ログイン')}
+        </button>
+        <button type="button" onClick={() => { setSignup(s => !s); setMsg(''); }} className="w-full text-xs text-gray-500 hover:text-gray-800">
+          {signup ? '既にアカウントがある → ログイン' : 'アカウントを作成する'}
+        </button>
+      </form>
+    </div>
+  );
+}
+function Root() {
+  const [session, setSession] = useState(AUTH_ENABLED ? undefined : null);
+  const [ready, setReady] = useState(!AUTH_ENABLED);
+  useEffect(() => {
+    if (!AUTH_ENABLED) return;
+    supa.auth.getSession().then(({ data }) => setSession(data.session || null));
+    const { data: sub } = supa.auth.onAuthStateChange((_e, s) => { setSession(s); setReady(false); });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+  useEffect(() => {
+    if (!AUTH_ENABLED || !session) return;
+    cloudLoad(session.user.id).finally(() => setReady(true));
+  }, [session]);
+  if (!AUTH_ENABLED) return <App session={null} />;
+  if (session === undefined) return <Splash text="読み込み中…" />;
+  if (!session) return <Login />;
+  if (!ready) return <Splash text="データを読み込み中…" />;
+  return <App key={session.user.id} session={session} />;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
 </script>
 </body>
 </html>
