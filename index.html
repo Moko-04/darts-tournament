@@ -326,7 +326,10 @@ function App({ session }) {
     return () => clearTimeout(t);
   }, [session, shareId, mode, cfg, pairs, singles, sNames, dbl, sgl, checkin]);
 
-  // QR自己エントリーの自動取込（ログイン時・15秒ポーリング）。未mergedを名簿へ追加＋自動来場→merged化。
+  // QR自己エントリーの自動取込（ログイン時・15秒ポーリング）。
+  // ・送信者(name_a)が既に名簿にいれば「その既存エントリーに来場チェック」だけ付ける（重複追加しない）
+  // ・いなければ名簿に追加し、本人(name_a)のみ来場チェック
+  // ・相方(name_b)はペア記録のみで来場チェックしない（相方は本人が別途チェックイン）
   useEffect(() => {
     if (!AUTH_ENABLED || !session || !shareId) return;
     let alive = true;
@@ -334,17 +337,30 @@ function App({ session }) {
       try {
         const { data } = await supa.from('self_entries').select('*').eq('share_id', shareId).eq('merged', false);
         if (!alive || !data || !data.length) return;
-        const dblE = data.filter(e => (e.mode || 'doubles') !== 'singles');
-        const sglE = data.filter(e => (e.mode || 'doubles') === 'singles');
-        if (dblE.length) {
-          const np = dblE.map(e => ({ id: uid(), a: (e.name_a || '').trim(), b: (e.name_b || '').trim() }));
-          setPairs(prev => [...prev, ...np]);
-          setCheckin(c => { const n = { ...c }; np.forEach(p => { if (p.a) n[`${p.id}:a`] = true; if (p.b) n[`${p.id}:b`] = true; }); return n; });
+        // 現在の名簿を localStorage から取得（クロージャの陳腐化を避ける）
+        const g = (k, d) => { try { const v = JSON.parse(localStorage.getItem('darts_' + k)); return v == null ? d : v; } catch (e) { return d; } };
+        const pairsNow = g('pairs', []), singlesNow = g('singles', []), sNamesNow = g('sNames', []);
+        const norm = s => (s || '').trim();
+        const keysToCheck = [];      // 既存エントリーの来場キー
+        const newPairs = [];         // 未マッチ（ダブルス）の新規ペア {id,a,b}
+        const newSNames = [];        // 未マッチ（シングルス）の新規名
+        for (const e of data) {
+          const nameA = norm(e.name_a); if (!nameA) continue;
+          if ((e.mode || 'doubles') === 'singles') {
+            const i = sNamesNow.findIndex(n => norm(n) === nameA);
+            if (i >= 0) keysToCheck.push(`sn:${i}`);
+            else { keysToCheck.push(`sn:${sNamesNow.length + newSNames.length}`); newSNames.push(nameA); }
+          } else {
+            let key = null;
+            for (const p of pairsNow) { if (norm(p.a) === nameA) { key = `${p.id}:a`; break; } if (norm(p.b) === nameA) { key = `${p.id}:b`; break; } }
+            if (!key) { const si = singlesNow.findIndex(n => norm(n) === nameA); if (si >= 0) key = `sg:${si}`; }
+            if (key) keysToCheck.push(key);
+            else { const id = uid(); newPairs.push({ id, a: nameA, b: norm(e.name_b) }); keysToCheck.push(`${id}:a`); } // 相方(b)はチェックしない
+          }
         }
-        if (sglE.length) {
-          const names = sglE.map(e => (e.name_a || '').trim());
-          setSNames(prev => { const base = prev.length; setCheckin(c => { const n = { ...c }; names.forEach((_, k) => { n[`sn:${base + k}`] = true; }); return n; }); return [...prev, ...names]; });
-        }
+        if (newPairs.length) setPairs(prev => [...prev, ...newPairs]);
+        if (newSNames.length) setSNames(prev => [...prev, ...newSNames]);
+        if (keysToCheck.length) setCheckin(c => { const n = { ...c }; keysToCheck.forEach(k => { n[k] = true; }); return n; });
         await supa.from('self_entries').update({ merged: true }).in('id', data.map(e => e.id));
       } catch (e) { console.warn('self_entries poll', e); }
     };

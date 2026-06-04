@@ -72,7 +72,10 @@
 ## QR自己エントリー（`?entry=shareId`・参加者が名前送信→自動受付）
 - エントリータブ（`EntryTab`/`SinglesEntry`）に `EntryQR`（`?entry=shareId` のQR＋URL）。参加者がスマホで開く＝`SelfEntry` 画面（認証不要、render分岐 `ENTRY_ID`）。
 - 参加者は名前（ダブルスは相方も任意）を送信 → `submitSelfEntry()` が `self_entries` に**匿名insert**（mode付き）。
-- 主催者アプリは `self_entries`（merged=false）を**15秒ポーリング**し、`mode` で振り分けて名簿へ取込：ダブルス→`pairs` に `{id,a,b}` 追加（checkin `${id}:a/:b` を自動ON）、シングルス→`sNames` 追加（checkin `sn:${i}` 自動ON）。取込後 `merged=true`。
+- 主催者アプリは `self_entries`（merged=false）を**15秒ポーリング**し取込（取込後 `merged=true`）。現在の名簿は localStorage から読み名前照合：
+  - **送信者 name_a が既に名簿にいれば、その既存エントリーに来場チェックのみ**（重複追加しない）。照合先＝ダブルスは `pairs`(a/b)＋`singles`(相方募集)、シングルスは `sNames`。
+  - いなければ名簿に追加（ダブルス→`pairs` に `{id,a,b}`、シングルス→`sNames`）し、**本人 name_a のみ来場チェック**。
+  - **相方 name_b はペア記録のみ・来場チェックしない**（相方は本人が別途チェックイン）。
 - QRを使わない人は従来どおり手動入力＋✓（来場チェック）でOK（併用）。
 - **要Supabase**: `self_entries` テーブル＋RLS（匿名insert可・shareの所有者のみread/update/delete）。SQLは `supabase-setup.sql`。未作成だと受付ページはエラー、取込も走らない。
 
