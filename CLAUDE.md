@@ -78,7 +78,7 @@
 
 ## デプロイ（公開URL）
 - **本番URL: https://moko-04.github.io/darts-tournament/ **（GitHub Pages・main/root 配信・`.nojekyll`・HTTPS強制）。
-- リポジトリは **public**（公開鍵のみ・service_roleは無し。テストアカウントの旧PWは過去履歴に残るが公開前に削除済で無効）。
+- リポジトリは **public**（公開鍵のみ・service_roleは無し）。テストアカウントの旧PWは公開前にSupabaseで削除＋git履歴からも除去済（filter-branch＋force-push）。秘密情報はコミットしないこと。
 - push で自動再ビルド（main へ push → Pages が再配信、約30秒）。ユーザーは普段 file:// でも確認可（CDN利用）。
 - ⚠️ **Supabase Authentication → URL Configuration を公開URLに合わせること**（確認メール／パスワードリセットのリンク用）:
   - Site URL = `https://moko-04.github.io/darts-tournament/`
