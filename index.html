@@ -57,6 +57,7 @@ const SUPABASE_URL = 'https://kzbqaotpoxoycrzsywqt.supabase.co';
 const SUPABASE_ANON = 'sb_publishable_4ONM5b8LqxLos5BmA_8pZw_7tnYpFc_'; // publishable(公開)キー
 const AUTH_ENABLED = /^https?:\/\//.test(SUPABASE_URL) && SUPABASE_ANON.length > 20;
 const supa = AUTH_ENABLED && window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON) : null;
+const ADMIN_EMAIL = 't_suzuki@dart-ace.com'; // アカウント発行依頼の送り先。自己登録は不可・管理者がSupabaseで手動発行する運用。
 
 /* ---------- 永続化 ---------- */
 const load = (k, d) => { try { const v = localStorage.getItem('darts_'+k); return v ? JSON.parse(v) : d; } catch { return d; } };
@@ -1250,23 +1251,23 @@ function Splash({ text }) {
 function Login() {
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
-  const [signup, setSignup] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const submit = async e => {
     e.preventDefault(); setBusy(true); setMsg('');
-    const r = signup ? await supa.auth.signUp({ email, password: pw }) : await supa.auth.signInWithPassword({ email, password: pw });
+    const r = await supa.auth.signInWithPassword({ email, password: pw });
     setBusy(false);
     if (r.error) setMsg(r.error.message);
-    else if (signup && !r.data.session) setMsg('確認メールを送信しました。メール内のリンクで認証してください。');
   };
+  // 自己登録は不可。アカウントは管理者がSupabaseで手動発行する運用 → 発行依頼はメールで。
+  const mailto = `mailto:${ADMIN_EMAIL}?subject=${encodeURIComponent('ダーツ運営アプリ アカウント発行依頼')}&body=${encodeURIComponent('店舗名 / お名前 / ログインに使うメールアドレス をご記入ください。')}`;
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <form onSubmit={submit} className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 w-full max-w-sm space-y-4">
         <div className="text-center">
           <div className="text-3xl mb-1">🎯</div>
           <h1 className="text-lg font-bold">ハウストーナメント運営</h1>
-          <p className="text-xs text-gray-400 mt-1">{signup ? '新規登録' : 'ログイン'}</p>
+          <p className="text-xs text-gray-400 mt-1">ログイン</p>
         </div>
         <input type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="メールアドレス"
           className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
@@ -1274,11 +1275,12 @@ function Login() {
           className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
         {msg && <p className="text-xs text-red-500">{msg}</p>}
         <button disabled={busy} type="submit" className="w-full bg-gray-900 hover:bg-gray-700 disabled:opacity-50 text-white font-bold rounded-lg py-2.5">
-          {busy ? '…' : (signup ? '登録する' : 'ログイン')}
+          {busy ? '…' : 'ログイン'}
         </button>
-        <button type="button" onClick={() => { setSignup(s => !s); setMsg(''); }} className="w-full text-xs text-gray-500 hover:text-gray-800">
-          {signup ? '既にアカウントがある → ログイン' : 'アカウントを作成する'}
-        </button>
+        <div className="pt-3 border-t border-gray-100 text-center space-y-1">
+          <p className="text-xs text-gray-400">アカウントは管理者が発行します（自己登録はできません）。</p>
+          <a href={mailto} className="inline-block text-xs text-blue-600 hover:text-blue-800 underline">アカウント発行を依頼する（メール）</a>
+        </div>
       </form>
     </div>
   );
