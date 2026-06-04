@@ -103,6 +103,7 @@ function importData(file) {
 const GMARK = ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16'];
 const SEP = /[\s,，、・･\/／&＆\+]+/;
 const advanceFor = g => (g >= 5 ? 3 : 2); // 各組から決勝進出数: 4組→2 / 5組以上→3（固定）
+const MIN_PER_GROUP = 4; // 各グループの最低チーム数（1組=ペア。各組は最低4チーム＝4組）
 const circled = n => (n >= 1 && n <= 20) ? String.fromCharCode(0x2460 + n - 1) : String(n);
 // 指定の対戦順（位置1始まり）。4名・5名はこの順に固定。
 const FIXED_SCHEDULES = {
@@ -294,9 +295,9 @@ function App({ session }) {
     }
     const ts = entriesToTeams(pairs, singles);
     if (ts.length < 2) { alert('2チーム以上のエントリーが必要です。'); return; }
-    if (ts.length < cfg.groups * 2) {
-      const maxG = Math.floor(ts.length / 2);
-      alert(`${cfg.groups}グループには最低${cfg.groups * 2}チーム必要です（各組2チーム以上・ダブルスは2名で1チーム）。\n現在 ${ts.length}チーム。グループ数を ${maxG} 以下にするか、追加してください。`);
+    if (ts.length < cfg.groups * MIN_PER_GROUP) {
+      const maxG = Math.max(1, Math.floor(ts.length / MIN_PER_GROUP));
+      alert(`${cfg.groups}グループには最低${cfg.groups * MIN_PER_GROUP}チーム必要です（各組${MIN_PER_GROUP}チーム以上・ダブルスは2名で1チーム）。\n現在 ${ts.length}チーム。グループ数を ${maxG} 以下にするか、追加してください。`);
       return;
     }
     setTeams(ts); setGroups(distribute(ts, cfg.groups));
@@ -309,6 +310,10 @@ function App({ session }) {
   }
   // グループ数を変更したら、既にチームがあれば即座に再振り分け（設定と組分けを常に一致させる）
   function changeGroupCount(v) {
+    if (teams.length && teams.length < v * MIN_PER_GROUP) {
+      alert(`各組${MIN_PER_GROUP}チーム以上にするため、${v}グループには最低${v * MIN_PER_GROUP}チーム必要です（現在 ${teams.length}チーム）。`);
+      return;
+    }
     const hasResults = rr && Object.keys(rr).length > 0;
     if (teams.length && hasResults && !confirm('グループ数を変えると入力済みのロビン結果は消え、再振り分けされます。よろしいですか？')) return;
     setCfg({ ...cfg, groups: v });
@@ -441,6 +446,8 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
       </div>
     </div>
   );
+  // 各組 MIN_PER_GROUP チーム以上にするための上限（チーム入力後のみ動的制限。未入力時は16）
+  const maxGroups = teams.length ? Math.max(2, Math.floor(teams.length / MIN_PER_GROUP)) : 16;
   return (
     <div className="space-y-5">
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
@@ -451,7 +458,7 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
 
       <div className="grid grid-cols-2 gap-3">
         <Step label="🎯 台数（ボード）" val={cfg.boards} set={v => setCfg({ ...cfg, boards: v })} min={1} max={20} hint="設置台数" />
-        <Step label="🧩 グループ数" val={cfg.groups} set={changeGroupCount} min={4} max={16} hint="4〜16組" />
+        <Step label="🧩 グループ数" val={cfg.groups} set={changeGroupCount} min={2} max={maxGroups} hint={`各組${MIN_PER_GROUP}チーム以上`} />
       </div>
 
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm text-sm text-gray-600">
