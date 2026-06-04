@@ -69,6 +69,13 @@
 - 共有UI: 設定タブの `SharePanel`（公開URL＋コピー＋**QR**＝`qrcodejs`）。
 - **要Supabase**: `tournament_shares` テーブル＋RLS（匿名read可・所有者のみwrite）。SQLは `supabase-setup.sql`。未作成だと公開ビューは「見つかりません」表示。
 
+## QR自己エントリー（`?entry=shareId`・参加者が名前送信→自動受付）
+- エントリータブ（`EntryTab`/`SinglesEntry`）に `EntryQR`（`?entry=shareId` のQR＋URL）。参加者がスマホで開く＝`SelfEntry` 画面（認証不要、render分岐 `ENTRY_ID`）。
+- 参加者は名前（ダブルスは相方も任意）を送信 → `submitSelfEntry()` が `self_entries` に**匿名insert**（mode付き）。
+- 主催者アプリは `self_entries`（merged=false）を**15秒ポーリング**し、`mode` で振り分けて名簿へ取込：ダブルス→`pairs` に `{id,a,b}` 追加（checkin `${id}:a/:b` を自動ON）、シングルス→`sNames` 追加（checkin `sn:${i}` 自動ON）。取込後 `merged=true`。
+- QRを使わない人は従来どおり手動入力＋✓（来場チェック）でOK（併用）。
+- **要Supabase**: `self_entries` テーブル＋RLS（匿名insert可・shareの所有者のみread/update/delete）。SQLは `supabase-setup.sql`。未作成だと受付ページはエラー、取込も走らない。
+
 ## データモデル
 - 共有: `cfg{store, boards, groups}` / `pairs[{id,a,b}]` / `singles[name]`（相方募集中）/ `sNames[]`（シングルス名簿）/ `mode` / `checkin{personKey:true}`（来場）/ `shareId`（公開ビューID）
 - イベント別 `dbl`/`sgl`: `teams[{id,name,members,solo}]` / `groups[[teamId,...]]` / `rr{gi:{"a_b":{a,b,sa,sb,winner}}}`（a<b正規化）/ `brk{winners,losers}`（各 `{rounds:[[match,...]]}`）/ `assign{matchId:boardNo}`

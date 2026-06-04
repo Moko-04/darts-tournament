@@ -94,6 +94,13 @@ async function publishShare(userId, shareId) {
   try { await supa.from('tournament_shares').upsert({ id: shareId, user_id: userId, data: blob, updated_at: new Date().toISOString() }); }
   catch (e) { console.warn('publishShare', e); }
 }
+// QR自己エントリー（参加者・匿名insert）
+async function submitSelfEntry(shareId, mode, nameA, nameB) {
+  const row = { share_id: shareId, mode, name_a: nameA };
+  if (nameB) row.name_b = nameB;
+  const { error } = await supa.from('self_entries').insert(row);
+  if (error) throw error;
+}
 function exportData() {
   const data = { _app: 'darts-tournament', _v: 1 };
   STATE_KEYS.forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) data[k] = JSON.parse(v); });
@@ -319,6 +326,33 @@ function App({ session }) {
     return () => clearTimeout(t);
   }, [session, shareId, mode, cfg, pairs, singles, sNames, dbl, sgl, checkin]);
 
+  // QR自己エントリーの自動取込（ログイン時・15秒ポーリング）。未mergedを名簿へ追加＋自動来場→merged化。
+  useEffect(() => {
+    if (!AUTH_ENABLED || !session || !shareId) return;
+    let alive = true;
+    const poll = async () => {
+      try {
+        const { data } = await supa.from('self_entries').select('*').eq('share_id', shareId).eq('merged', false);
+        if (!alive || !data || !data.length) return;
+        const dblE = data.filter(e => (e.mode || 'doubles') !== 'singles');
+        const sglE = data.filter(e => (e.mode || 'doubles') === 'singles');
+        if (dblE.length) {
+          const np = dblE.map(e => ({ id: uid(), a: (e.name_a || '').trim(), b: (e.name_b || '').trim() }));
+          setPairs(prev => [...prev, ...np]);
+          setCheckin(c => { const n = { ...c }; np.forEach(p => { if (p.a) n[`${p.id}:a`] = true; if (p.b) n[`${p.id}:b`] = true; }); return n; });
+        }
+        if (sglE.length) {
+          const names = sglE.map(e => (e.name_a || '').trim());
+          setSNames(prev => { const base = prev.length; setCheckin(c => { const n = { ...c }; names.forEach((_, k) => { n[`sn:${base + k}`] = true; }); return n; }); return [...prev, ...names]; });
+        }
+        await supa.from('self_entries').update({ merged: true }).in('id', data.map(e => e.id));
+      } catch (e) { console.warn('self_entries poll', e); }
+    };
+    poll();
+    const iv = setInterval(poll, 15000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [session, shareId]);
+
   // アクティブなイベントの本体＋セッター（モードで切替）
   const ev = mode === 'doubles' ? dbl : sgl;
   const setEv = mode === 'doubles' ? setDbl : setSgl;
@@ -502,11 +536,38 @@ function App({ session }) {
 
       {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode, shareId }} />}
       {tab === 'entry' && (isS
-        ? <SinglesEntry {...{ sNames, setSNames, generate, cfg, checkin, toggleCheckin }} />
-        : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin }} />)}
+        ? <SinglesEntry {...{ sNames, setSNames, generate, cfg, checkin, toggleCheckin, shareId }} />
+        : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin, shareId }} />)}
       {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg, unit }} />}
       {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }} />}
       {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames }} />}
+    </div>
+  );
+}
+
+/* ---------- エントリー受付QR（参加者がセルフエントリー） ---------- */
+function EntryQR({ shareId }) {
+  const qrRef = React.useRef(null);
+  const [copied, setCopied] = useState(false);
+  const url = `${location.origin}${location.pathname}?entry=${shareId}`;
+  useEffect(() => {
+    if (qrRef.current && window.QRCode) { qrRef.current.innerHTML = ''; new window.QRCode(qrRef.current, { text: url, width: 140, height: 140, correctLevel: window.QRCode.CorrectLevel.M }); }
+  }, [url]);
+  const copy = async () => { try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) {} };
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+      <div className="font-bold mb-1">📱 QRでセルフエントリー受付</div>
+      <p className="text-xs text-gray-400 mb-3">参加者がこのQRを読み取って名前を送ると、<b>自動で名簿に追加＋来場（受付）</b>されます（取込は十数秒ごと）。QRを使わない人は下の手動入力＆✓でOK。</p>
+      <div className="flex gap-4 items-start">
+        <div ref={qrRef} className="border border-gray-100 rounded shrink-0 w-[140px] h-[140px] flex items-center justify-center" />
+        <div className="flex-1 min-w-0 space-y-2">
+          <input readOnly value={url} onFocus={e => e.target.select()} className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-xs" />
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={copy} className="bg-gray-900 hover:bg-gray-700 text-white text-sm rounded-lg px-4 py-1.5">{copied ? '✓ コピー' : 'URLをコピー'}</button>
+            <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm border border-gray-300 rounded-lg px-4 py-1.5 text-gray-600 hover:bg-gray-50">開く</a>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -611,7 +672,7 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
 }
 
 /* ---------- エントリー（ペア枠＋シングル枠） ---------- */
-function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin }) {
+function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin, shareId }) {
   const [single, setSingle] = useState('');
   const [drag, setDrag] = useState(null);     // ドラッグ中のシングルindex
   const [overSlot, setOverSlot] = useState(null); // ハイライト中の "rowId:field" / "single:i" / "new"
@@ -720,6 +781,7 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg, checkin
 
   return (
     <div className="space-y-5">
+      {shareId && <EntryQR shareId={shareId} />}
       {totalPeople > 0 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-sm flex items-center gap-x-3 gap-y-1 flex-wrap">
           <span className="font-bold text-emerald-700">受付（当日チェックイン）</span>
@@ -834,7 +896,7 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg, checkin
 }
 
 /* ---------- シングルス エントリー（個人名・行リスト） ---------- */
-function SinglesEntry({ sNames, setSNames, generate, cfg, checkin, toggleCheckin }) {
+function SinglesEntry({ sNames, setSNames, generate, cfg, checkin, toggleCheckin, shareId }) {
   const [dragI, setDragI] = useState(null);
   const [overI, setOverI] = useState(null);
   const [bulk, setBulk] = useState('');
@@ -856,6 +918,7 @@ function SinglesEntry({ sNames, setSNames, generate, cfg, checkin, toggleCheckin
   };
   return (
     <div className="space-y-4">
+      {shareId && <EntryQR shareId={shareId} />}
       {valid > 0 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-sm flex items-center gap-x-3 gap-y-1 flex-wrap">
           <span className="font-bold text-emerald-700">受付（当日チェックイン）</span>
@@ -1439,6 +1502,63 @@ function Login() {
     </div>
   );
 }
+/* ---------- QR自己エントリー（参加者向け・?entry=shareId） ---------- */
+function SelfEntry({ shareId }) {
+  const [meta, setMeta] = useState(undefined); // undefined=読込中 / null=無効 / {store,mode}
+  const [a, setA] = useState('');
+  const [b, setB] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    if (!supa || !shareId) { setMeta(null); return; }
+    supa.from('tournament_shares').select('data').eq('id', shareId).maybeSingle()
+      .then(({ data }) => { if (data && data.data) setMeta({ store: (data.data.cfg || {}).store || '', mode: data.data.mode || 'doubles' }); else setMeta(null); })
+      .catch(() => setMeta(null));
+  }, [shareId]);
+  const submit = async e => {
+    e.preventDefault();
+    if (!a.trim()) { setErr('お名前を入力してください'); return; }
+    setBusy(true); setErr('');
+    try { await submitSelfEntry(shareId, meta ? meta.mode : 'doubles', a.trim(), (b || '').trim()); setDone(true); }
+    catch (ex) { setErr('送信に失敗しました。時間をおいて再度お試しください。'); }
+    setBusy(false);
+  };
+  if (meta === undefined) return <Splash text="読み込み中…" />;
+  if (meta === null) return <Splash text="この受付ページは見つかりませんでした。URL／QRをご確認ください。" />;
+  const isDbl = meta.mode === 'doubles';
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 py-8">
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 w-full max-w-sm">
+        <div className="text-center mb-4">
+          <div className="text-3xl mb-1">🎯</div>
+          <h1 className="text-lg font-bold">{meta.store || 'ハウストーナメント'}</h1>
+          <p className="text-xs text-gray-400 mt-1">エントリー受付（{isDbl ? 'ダブルス' : 'シングルス'}）</p>
+        </div>
+        {done ? (
+          <div className="text-center space-y-3">
+            <div className="text-3xl">✅</div>
+            <p className="text-sm text-gray-700">エントリーを受け付けました。<br />受付が完了しています。</p>
+            <button onClick={() => { setA(''); setB(''); setDone(false); }} className="text-xs text-blue-600 hover:text-blue-800 underline">続けて別の人を登録</button>
+          </div>
+        ) : (
+          <form onSubmit={submit} className="space-y-3">
+            <input value={a} onChange={e => setA(e.target.value)} placeholder="お名前"
+              className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            {isDbl && <input value={b} onChange={e => setB(e.target.value)} placeholder="相方のお名前（決まっていれば）"
+              className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />}
+            {err && <p className="text-xs text-red-500">{err}</p>}
+            <button disabled={busy} type="submit" className="w-full bg-gray-900 hover:bg-gray-700 disabled:opacity-50 text-white font-bold rounded-lg py-2.5">
+              {busy ? '送信中…' : 'エントリーする'}
+            </button>
+            <p className="text-[11px] text-gray-400 text-center">{isDbl ? '相方が未定でもOK（後で組み合わせます）。' : '個人戦のエントリーです。'}送信すると受付（来場）されます。</p>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- 公開ビュー用：スマホ向けコンパクト順位表 ---------- */
 function PublicStandings({ groups, standings, nameOf }) {
   if (!groups.length) return <Empty msg="まだ順位表がありません。" />;
@@ -1567,7 +1687,10 @@ function Root() {
 }
 
 const VIEW_ID = (() => { try { return new URLSearchParams(window.location.search).get('view'); } catch (e) { return null; } })();
-ReactDOM.createRoot(document.getElementById('root')).render(VIEW_ID ? <PublicView shareId={VIEW_ID} /> : <Root />);
+const ENTRY_ID = (() => { try { return new URLSearchParams(window.location.search).get('entry'); } catch (e) { return null; } })();
+ReactDOM.createRoot(document.getElementById('root')).render(
+  ENTRY_ID ? <SelfEntry shareId={ENTRY_ID} /> : VIEW_ID ? <PublicView shareId={VIEW_ID} /> : <Root />
+);
 </script>
 </body>
 </html>
