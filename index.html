@@ -63,7 +63,7 @@ const ACCOUNT_REQUEST_URL = 'https://docs.google.com/forms/d/e/1FAIpQLScJjC8-0kn
 /* ---------- 永続化 ---------- */
 const load = (k, d) => { try { const v = localStorage.getItem('darts_'+k); return v ? JSON.parse(v) : d; } catch { return d; } };
 const save = (k, v) => { try { localStorage.setItem('darts_'+k, JSON.stringify(v)); } catch {} };
-const STATE_KEYS = ['mode', 'cfg', 'pairs', 'singles', 'sNames', 'dbl', 'sgl'];
+const STATE_KEYS = ['mode', 'cfg', 'pairs', 'singles', 'sNames', 'dbl', 'sgl', 'checkin', 'shareId'];
 // クラウド（Supabase）読み込み: 前のユーザーのローカルを消してから自分のデータを反映
 async function cloudLoad(userId) {
   STATE_KEYS.forEach(k => localStorage.removeItem('darts_' + k));
@@ -77,6 +77,14 @@ async function cloudSave(userId) {
   STATE_KEYS.forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) blob[k] = JSON.parse(v); });
   try { await supa.from('app_state').upsert({ user_id: userId, data: blob, updated_at: new Date().toISOString() }); }
   catch (e) { console.warn('cloudSave', e); }
+}
+// 公開進行ビュー用のスナップショットを upsert（匿名で読めるRLS付きテーブル tournament_shares へ）
+async function publishShare(userId, shareId) {
+  if (!supa || !shareId) return;
+  const blob = {};
+  STATE_KEYS.forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) blob[k] = JSON.parse(v); });
+  try { await supa.from('tournament_shares').upsert({ id: shareId, user_id: userId, data: blob, updated_at: new Date().toISOString() }); }
+  catch (e) { console.warn('publishShare', e); }
 }
 function exportData() {
   const data = { _app: 'darts-tournament', _v: 1 };
@@ -231,6 +239,14 @@ function App({ session }) {
     return blank();
   });
   const [sgl, setSgl] = useState(load('sgl', null) || blank());
+  // 当日チェックイン（来場確認）: { personKey: true }。personKey = `${pair.id}:a|b` / `sg:${i}`(相方募集) / `sn:${i}`(シングルス名簿)
+  const [checkin, setCheckin] = useState(load('checkin', {}));
+  // 公開ビュー用の共有ID（一度だけ生成して固定）
+  const [shareId, setShareId] = useState(() => {
+    const s = load('shareId', null); if (s) return s;
+    const id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10);
+    return id;
+  });
 
   useEffect(() => save('mode', mode), [mode]);
   useEffect(() => save('cfg', cfg), [cfg]);
@@ -239,6 +255,8 @@ function App({ session }) {
   useEffect(() => save('sNames', sNames), [sNames]);
   useEffect(() => save('dbl', dbl), [dbl]);
   useEffect(() => save('sgl', sgl), [sgl]);
+  useEffect(() => save('checkin', checkin), [checkin]);
+  useEffect(() => save('shareId', shareId), [shareId]);
 
   // 旧キーの掃除：2イベント構成（dbl/sgl）移行前のトップレベル残骸を一度だけ削除。
   // 取り込み（上の dbl 初期化のマイグレーション）は描画前に済み、dbl/sgl は保存effectで永続化されるので安全。
@@ -251,7 +269,14 @@ function App({ session }) {
     if (!AUTH_ENABLED || !session) return;
     const t = setTimeout(() => cloudSave(session.user.id), 1500);
     return () => clearTimeout(t);
-  }, [mode, cfg, pairs, singles, sNames, dbl, sgl]);
+  }, [mode, cfg, pairs, singles, sNames, dbl, sgl, checkin, shareId]);
+
+  // 公開進行ビューへの自動反映（ログイン時のみ・2秒デバウンスで tournament_shares に upsert）
+  useEffect(() => {
+    if (!AUTH_ENABLED || !session || !shareId) return;
+    const t = setTimeout(() => publishShare(session.user.id, shareId), 2000);
+    return () => clearTimeout(t);
+  }, [session, shareId, mode, cfg, pairs, singles, sNames, dbl, sgl, checkin]);
 
   // アクティブなイベントの本体＋セッター（モードで切替）
   const ev = mode === 'doubles' ? dbl : sgl;
@@ -260,6 +285,15 @@ function App({ session }) {
   const teams = ev.teams, groups = ev.groups, rr = ev.rr, brk = ev.brk, assign = ev.assign;
   const setTeams = v => upd('teams', v), setGroups = v => upd('groups', v), setRr = v => upd('rr', v), setBrk = v => upd('brk', v), setAssign = v => upd('assign', v);
   const isS = mode === 'singles', unit = isS ? '人' : 'チーム';
+
+  // 当日チェックイン（来場確認）
+  const toggleCheckin = key => setCheckin(c => { const n = { ...c }; if (n[key]) delete n[key]; else n[key] = true; return n; });
+  const entrantCount = isS
+    ? sNames.filter(n => (n || '').trim()).length
+    : pairs.reduce((a, p) => a + ((p.a || '').trim() ? 1 : 0) + ((p.b || '').trim() ? 1 : 0), 0) + singles.filter(n => (n || '').trim()).length;
+  const checkinCount = isS
+    ? sNames.filter((n, i) => (n || '').trim() && checkin[`sn:${i}`]).length
+    : pairs.reduce((a, p) => a + (((p.a || '').trim() && checkin[`${p.id}:a`]) ? 1 : 0) + (((p.b || '').trim() && checkin[`${p.id}:b`]) ? 1 : 0), 0) + singles.filter((n, i) => (n || '').trim() && checkin[`sg:${i}`]).length;
 
   // 開発用: ダブルスが空なら17組／シングルスが空なら個人名を自動投入
   useEffect(() => {
@@ -393,6 +427,7 @@ function App({ session }) {
         <h1 className="text-lg font-bold tracking-tight">ハウストーナメント運営</h1>
         {cfg.store && <span className="px-2 py-0.5 rounded bg-gray-200 text-sm text-gray-700">{cfg.store}</span>}
         {teams.length > 0 && <span className="text-sm text-gray-400">{teams.length}{unit} / {groups.length}グループ / {cfg.boards}台</span>}
+        {entrantCount > 0 && <span className="text-sm text-emerald-600 font-medium" title="来場（チェックイン）済み / 事前エントリー人数">受付 {checkinCount}/{entrantCount}人</span>}
         {AUTH_ENABLED && session && (
           <span className="ml-auto flex items-center gap-2 text-sm">
             <span className="text-gray-400 hidden sm:inline">{session.user.email}</span>
@@ -426,8 +461,8 @@ function App({ session }) {
 
       {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode }} />}
       {tab === 'entry' && (isS
-        ? <SinglesEntry {...{ sNames, setSNames, generate, cfg }} />
-        : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg }} />)}
+        ? <SinglesEntry {...{ sNames, setSNames, generate, cfg, checkin, toggleCheckin }} />
+        : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin }} />)}
       {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg, unit }} />}
       {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }} />}
       {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames }} />}
@@ -502,7 +537,7 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
 }
 
 /* ---------- エントリー（ペア枠＋シングル枠） ---------- */
-function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
+function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin }) {
   const [single, setSingle] = useState('');
   const [drag, setDrag] = useState(null);     // ドラッグ中のシングルindex
   const [overSlot, setOverSlot] = useState(null); // ハイライト中の "rowId:field" / "single:i" / "new"
@@ -597,9 +632,27 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
         className={`select-none text-base leading-none ${v ? 'cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-600' : 'text-transparent'} ${dim ? 'opacity-30' : ''}`}>⠿</span>
     );
   };
+  // 当日チェックイン（来場）トグル（個人ごと）。名前が空の枠は占位のみ。
+  const chk = (key, name) => {
+    if (!(name || '').trim()) return <span className="w-7 shrink-0" aria-hidden="true" />;
+    const on = !!checkin[key];
+    return (
+      <button type="button" onClick={() => toggleCheckin(key)}
+        title={on ? '来場済み（クリックで取消）' : '未来場（クリックで来場に）'}
+        className={`shrink-0 w-7 h-7 rounded-full border text-xs font-bold leading-none ${on ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-gray-300 text-gray-300 hover:border-emerald-400 hover:text-emerald-500'}`}>✓</button>
+    );
+  };
+  const checkedCount = pairs.reduce((a, p) => a + (((p.a || '').trim() && checkin[`${p.id}:a`]) ? 1 : 0) + (((p.b || '').trim() && checkin[`${p.id}:b`]) ? 1 : 0), 0) + singles.filter((n, i) => (n || '').trim() && checkin[`sg:${i}`]).length;
 
   return (
     <div className="space-y-5">
+      {totalPeople > 0 && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-sm flex items-center gap-x-3 gap-y-1 flex-wrap">
+          <span className="font-bold text-emerald-700">受付（当日チェックイン）</span>
+          <span className="text-emerald-700"><b className="text-lg">{checkedCount}</b> / {totalPeople}名 来場</span>
+          <span className="text-emerald-600 opacity-70 text-xs">各名前の ✓ をタップして来場をチェック（未チェック＝未来場）</span>
+        </div>
+      )}
       {/* ペアエントリー */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -620,6 +673,7 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
                   onDragLeave={() => setOverSlot(o => o === p.id + ':a' ? null : o)}
                   onDrop={e => { e.preventDefault(); dropToSlot(p.id, 'a'); }}
                   className={slotCls(p.id + ':a') + (dimA ? ' opacity-30' : '')} />
+                {chk(p.id + ':a', p.a)}
                 <span className="text-gray-400 mx-0.5">・</span>
                 {grip(p.id, 'b')}
                 <input value={p.b} onChange={e => updatePair(p.id, 'b', e.target.value)} placeholder="選手B"
@@ -627,6 +681,7 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
                   onDragLeave={() => setOverSlot(o => o === p.id + ':b' ? null : o)}
                   onDrop={e => { e.preventDefault(); dropToSlot(p.id, 'b'); }}
                   className={slotCls(p.id + ':b') + (dimB ? ' opacity-30' : '')} />
+                {chk(p.id + ':b', p.b)}
                 <button onClick={() => removePair(p.id)} className="w-8 h-8 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-red-500">×</button>
               </div>
             );
@@ -676,6 +731,9 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
                       onDrop={e => { e.preventDefault(); e.stopPropagation(); dropOnSingle(i); }}
                       className={`inline-flex items-center gap-1 text-sm px-2.5 py-1 rounded-full border cursor-grab active:cursor-grabbing select-none ${hl ? 'bg-amber-100 border-amber-400 ring-2 ring-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'} ${dim ? 'opacity-40' : ''}`}>
                       <span className="text-amber-300">⠿</span>{n}
+                      <button type="button" onClick={e => { e.stopPropagation(); toggleCheckin(`sg:${i}`); }}
+                        title={checkin[`sg:${i}`] ? '来場済み（クリックで取消）' : '未来場（クリックで来場に）'}
+                        className={`w-5 h-5 rounded-full border text-[10px] leading-none font-bold ${checkin[`sg:${i}`] ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-amber-300 text-amber-300 hover:border-emerald-400 hover:text-emerald-500'}`}>✓</button>
                       <button onClick={() => removeSingle(i)} className="text-amber-400 hover:text-red-500">×</button>
                     </span>
                   );
@@ -702,7 +760,7 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
 }
 
 /* ---------- シングルス エントリー（個人名・行リスト） ---------- */
-function SinglesEntry({ sNames, setSNames, generate, cfg }) {
+function SinglesEntry({ sNames, setSNames, generate, cfg, checkin, toggleCheckin }) {
   const [dragI, setDragI] = useState(null);
   const [overI, setOverI] = useState(null);
   const [bulk, setBulk] = useState('');
@@ -712,8 +770,25 @@ function SinglesEntry({ sNames, setSNames, generate, cfg }) {
   const addBulk = () => { const arr = bulk.split(/[\n,，、]/).map(s => s.trim()).filter(Boolean); if (arr.length) { setSNames([...sNames, ...arr]); setBulk(''); } };
   const move = (from, to) => { if (from == null || from === to) return; const a = sNames.slice(); const [x] = a.splice(from, 1); a.splice(to, 0, x); setSNames(a); };
   const valid = sNames.filter(n => (n || '').trim()).length;
+  const checkedCount = sNames.filter((n, i) => (n || '').trim() && checkin[`sn:${i}`]).length;
+  const chk = (i, name) => {
+    if (!(name || '').trim()) return <span className="w-6 shrink-0" aria-hidden="true" />;
+    const on = !!checkin[`sn:${i}`];
+    return (
+      <button type="button" onClick={() => toggleCheckin(`sn:${i}`)}
+        title={on ? '来場済み（クリックで取消）' : '未来場（クリックで来場に）'}
+        className={`shrink-0 w-6 h-6 rounded-full border text-xs font-bold leading-none ${on ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-gray-300 text-gray-300 hover:border-emerald-400 hover:text-emerald-500'}`}>✓</button>
+    );
+  };
   return (
     <div className="space-y-4">
+      {valid > 0 && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-sm flex items-center gap-x-3 gap-y-1 flex-wrap">
+          <span className="font-bold text-emerald-700">受付（当日チェックイン）</span>
+          <span className="text-emerald-700"><b className="text-lg">{checkedCount}</b> / {valid}名 来場</span>
+          <span className="text-emerald-600 opacity-70 text-xs">各名前の ✓ をタップして来場をチェック</span>
+        </div>
+      )}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
           <h2 className="font-bold">シングルス エントリー <span className="text-sm font-normal text-gray-400">（個人戦）</span></h2>
@@ -732,6 +807,7 @@ function SinglesEntry({ sNames, setSNames, generate, cfg }) {
                   title="ドラッグで並び替え" className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 select-none">⠿</span>
                 <input value={name} onChange={e => update(i, e.target.value)} placeholder="名前"
                   className="flex-1 min-w-0 bg-gray-50 border border-gray-300 rounded px-2 py-1 text-sm" />
+                {chk(i, name)}
                 <button onClick={() => removeRow(i)} className="w-6 h-6 shrink-0 rounded text-gray-400 hover:bg-gray-100 hover:text-red-500">×</button>
               </div>
             ))}
