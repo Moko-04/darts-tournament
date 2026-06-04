@@ -53,7 +53,7 @@
 - ⚠️ クライアントに置くのは **publishable(anon) 公開キーのみ**。`service_role`（秘密）キーは絶対にコードに貼らない（データはRLSで保護）。
 - テーブル `public.app_state(user_id uuid pk, data jsonb, updated_at)` ＋ RLS（自分の行のみ）。SQLは repo の **`supabase-setup.sql`**。
 - `cloudLoad(uid)` = ローカルクリア後に自分のdataを反映 / `cloudSave(uid)` = `STATE_KEYS` をJSONでupsert（変更を1.5秒デバウンス）。`Root`(認証ラッパー) / `Login` / `Splash` コンポーネント。ヘッダーにメール表示＋ログアウト。
-- **テストアカウント: t_suzuki@dart-ace.com / `REDACTED`**（メール確認済）。Supabaseは「Confirm email」ON。
+- **テストアカウント**: `t_suzuki@dart-ace.com`（メール確認済）。**パスワードはリポジトリに置かない**（オーナーのパスワードマネージャーで管理）。Supabaseは「Confirm email」ON。
 - `STATE_KEYS = [mode, cfg, pairs, singles, sNames, dbl, sgl]`（export/import JSON もこのキー）。
 
 ## データモデル
