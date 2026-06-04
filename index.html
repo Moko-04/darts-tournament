@@ -451,7 +451,7 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
 
       <div className="grid grid-cols-2 gap-3">
         <Step label="🎯 台数（ボード）" val={cfg.boards} set={v => setCfg({ ...cfg, boards: v })} min={1} max={20} hint="設置台数" />
-        <Step label="🧩 グループ数" val={cfg.groups} set={changeGroupCount} min={2} max={16} hint="2〜16組" />
+        <Step label="🧩 グループ数" val={cfg.groups} set={changeGroupCount} min={4} max={16} hint="4〜16組" />
       </div>
 
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm text-sm text-gray-600">
