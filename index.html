@@ -561,6 +561,41 @@ function App({ session }) {
   );
 }
 
+/* ---------- 名前検索でチェックイン（手動受付の補助） ---------- */
+function CheckinSearch({ people, checkin, toggleCheckin }) {
+  const [q, setQ] = useState('');
+  const query = q.trim();
+  const matches = query ? people.filter(p => p.name.includes(query)) : [];
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+      <div className="font-bold mb-2">🔎 名前で受付（チェックイン）</div>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="名前の一部を入力して検索…"
+        className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+      {query ? (
+        matches.length ? (
+          <ul className="mt-3 space-y-1.5 max-h-72 overflow-y-auto">
+            {matches.map(p => {
+              const on = !!checkin[p.key];
+              return (
+                <li key={p.key}>
+                  <button type="button" onClick={() => toggleCheckin(p.key)}
+                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border text-sm transition-colors ${on ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-gray-200 hover:border-emerald-300'}`}>
+                    <span className="font-medium truncate">{p.name}</span>
+                    <span className={`shrink-0 inline-flex items-center gap-1 text-xs font-bold ${on ? 'text-emerald-600' : 'text-amber-500'}`}>
+                      <span className={`w-5 h-5 rounded-full border inline-flex items-center justify-center text-[10px] ${on ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-amber-300 text-amber-400'}`}>✓</span>
+                      {on ? '来場済み（取消）' : '未来場 → 受付'}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : <p className="mt-2 text-xs text-gray-400">「{query}」に一致する名前がありません。</p>
+      ) : <p className="mt-2 text-xs text-gray-400">名前の一部を入力すると候補が出ます。タップで来場/取消。下の一覧の ✓ でもチェックできます。</p>}
+    </div>
+  );
+}
+
 /* ---------- エントリー受付QR（参加者がセルフエントリー） ---------- */
 function EntryQR({ shareId }) {
   const qrRef = React.useRef(null);
@@ -794,6 +829,9 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg, checkin
     );
   };
   const checkedCount = pairs.reduce((a, p) => a + (((p.a || '').trim() && checkin[`${p.id}:a`]) ? 1 : 0) + (((p.b || '').trim() && checkin[`${p.id}:b`]) ? 1 : 0), 0) + singles.filter((n, i) => (n || '').trim() && checkin[`sg:${i}`]).length;
+  const checkinPeople = [];
+  pairs.forEach(p => { const a = (p.a || '').trim(), b = (p.b || '').trim(); if (a) checkinPeople.push({ name: a, key: `${p.id}:a` }); if (b) checkinPeople.push({ name: b, key: `${p.id}:b` }); });
+  singles.forEach((n, i) => { const nm = (n || '').trim(); if (nm) checkinPeople.push({ name: nm, key: `sg:${i}` }); });
 
   return (
     <div className="space-y-5">
@@ -805,6 +843,7 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg, checkin
           <span className="text-emerald-600 opacity-70 text-xs">各名前の ✓ をタップして来場をチェック（未チェック＝未来場）</span>
         </div>
       )}
+      {totalPeople > 0 && <CheckinSearch people={checkinPeople} checkin={checkin} toggleCheckin={toggleCheckin} />}
       {/* ペアエントリー */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -942,6 +981,7 @@ function SinglesEntry({ sNames, setSNames, generate, cfg, checkin, toggleCheckin
           <span className="text-emerald-600 opacity-70 text-xs">各名前の ✓ をタップして来場をチェック</span>
         </div>
       )}
+      {valid > 0 && <CheckinSearch people={sNames.map((n, i) => ({ name: (n || '').trim(), key: `sn:${i}` })).filter(p => p.name)} checkin={checkin} toggleCheckin={toggleCheckin} />}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
           <h2 className="font-bold">シングルス エントリー <span className="text-sm font-normal text-gray-400">（個人戦）</span></h2>
