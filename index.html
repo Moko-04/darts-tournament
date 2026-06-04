@@ -8,6 +8,7 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   body { background:#f8fafc; }
@@ -206,6 +207,39 @@ function entriesToTeams(pairs, singles) {
 // シングルス: 個人名 → 1人1チーム
 function namesToTeams(names) {
   return names.map((n, i) => ({ id: i + 1, name: (n || '').trim(), members: [(n || '').trim()] })).filter(t => t.name);
+}
+
+/* ---------- 表示用の純粋ヘルパー（公開ビューで使用。App内の同等ロジックと対応） ---------- */
+function makeHelpers(teams, groups, rr) {
+  const nameOf = id => { const t = (teams || []).find(t => t.id === id); if (t) return (t.members && t.members.length ? t.members.join('・') : t.name); return typeof id === 'string' ? id : '?'; };
+  const getResult = (gi, a, b) => { const key = a < b ? `${a}_${b}` : `${b}_${a}`; return ((rr || {})[gi] || {})[key] || null; };
+  function standings(gi) {
+    const ids = (groups || [])[gi] || [];
+    const stat = Object.fromEntries(ids.map(id => [id, { id, w: 0, l: 0, lf: 0, la: 0, hh: 0 }]));
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+      const r = getResult(gi, ids[i], ids[j]); if (!r || r.winner == null) continue;
+      stat[r.a].lf += r.sa; stat[r.a].la += r.sb; stat[r.b].lf += r.sb; stat[r.b].la += r.sa;
+      if (r.winner === 'a') { stat[r.a].w++; stat[r.b].l++; } else { stat[r.b].w++; stat[r.a].l++; }
+    }
+    let arr = Object.values(stat).sort((p, q) => q.w - p.w);
+    const out = []; let i = 0;
+    while (i < arr.length) {
+      let j = i; while (j < arr.length && arr[j].w === arr[i].w) j++;
+      const tie = arr.slice(i, j);
+      if (tie.length > 1) {
+        tie.forEach(t => t.hh = 0);
+        for (const x of tie) for (const y of tie) {
+          if (x === y) continue;
+          const r = getResult(gi, x.id, y.id);
+          if (r && r.winner != null) { const wid = r.winner === 'a' ? r.a : r.b; if (wid === x.id) x.hh++; }
+        }
+        tie.sort((p, q) => q.hh - p.hh || (q.lf - q.la) - (p.lf - p.la) || q.lf - p.lf);
+      }
+      out.push(...tie); i = j;
+    }
+    return out;
+  }
+  return { nameOf, getResult, standings };
 }
 
 /* ---------- メイン ---------- */
@@ -459,7 +493,7 @@ function App({ session }) {
         </div>
       )}
 
-      {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode }} />}
+      {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode, shareId }} />}
       {tab === 'entry' && (isS
         ? <SinglesEntry {...{ sNames, setSNames, generate, cfg, checkin, toggleCheckin }} />
         : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin }} />)}
@@ -470,8 +504,39 @@ function App({ session }) {
   );
 }
 
+/* ---------- 参加者向け公開リンク＋QR ---------- */
+function SharePanel({ shareId }) {
+  const qrRef = React.useRef(null);
+  const [copied, setCopied] = useState(false);
+  const url = `${location.origin}${location.pathname}?view=${shareId}`;
+  useEffect(() => {
+    if (qrRef.current && window.QRCode) {
+      qrRef.current.innerHTML = '';
+      new window.QRCode(qrRef.current, { text: url, width: 160, height: 160, correctLevel: window.QRCode.CorrectLevel.M });
+    }
+  }, [url]);
+  const copy = async () => { try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) {} };
+  return (
+    <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
+      <div className="font-bold mb-1">📣 参加者に公開（進行状況の閲覧）</div>
+      <p className="text-xs text-gray-400 mb-3">このURL／QRを共有すると、参加者は<b>ログイン不要</b>で順位表・トーナメントを<b>閲覧専用</b>で見られます（数秒ごとに自動更新）。</p>
+      <div className="flex flex-col sm:flex-row gap-4 items-start">
+        <div ref={qrRef} className="border border-gray-100 rounded shrink-0 w-[160px] h-[160px] flex items-center justify-center" />
+        <div className="flex-1 min-w-0 w-full space-y-2">
+          <input readOnly value={url} onFocus={e => e.target.select()} className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-xs" />
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={copy} className="bg-gray-900 hover:bg-gray-700 text-white text-sm rounded-lg px-4 py-1.5">{copied ? '✓ コピーしました' : 'URLをコピー'}</button>
+            <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm border border-gray-300 rounded-lg px-4 py-1.5 text-gray-600 hover:bg-gray-50">新しいタブで開く</a>
+          </div>
+          <p className="text-[11px] text-gray-400">※ 参加者には結果の編集はできません（閲覧のみ）。</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- 設定 ---------- */
-function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode }) {
+function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode, shareId }) {
   const Step = ({ label, val, set, min, max, hint }) => (
     <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
       <div className="text-sm text-gray-500 mb-2">{label}</div>
@@ -510,6 +575,8 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
         </div>
         <button onClick={() => setTab('entry')} className="bg-gray-900 hover:bg-gray-700 text-white text-sm font-bold rounded-lg px-4 py-2 whitespace-nowrap">エントリーへ →</button>
       </div>
+
+      {shareId && <SharePanel shareId={shareId} />}
 
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
         <div className="text-sm font-medium mb-1">データの持ち運び（別PC・バックアップ）</div>
@@ -870,7 +937,7 @@ function GroupEditor({ groups, nameOf, movePlayer, reshuffle, cfg }) {
 }
 
 /* ---------- ロビン表 ---------- */
-function RoundRobin({ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }) {
+function RoundRobin({ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign, readOnly }) {
   const [open, setOpen] = useState(true);
   const [drag, setDrag] = useState(null); // {gi,id}
   const [over, setOver] = useState(null); // "gi:id"
@@ -891,14 +958,14 @@ function RoundRobin({ groups, nameOf, getResult, setResult, standings, cfg, swap
           ラウンドロビン
           <span className="text-gray-400 text-base">{open ? '∧' : '∨'}</span>
         </button>
-        {DEV_SEED && <button onClick={fillRandom} className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold rounded-lg px-3 py-1.5">🧪 全試合ランダム結果</button>}
+        {!readOnly && DEV_SEED && <button onClick={fillRandom} className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold rounded-lg px-3 py-1.5">🧪 全試合ランダム結果</button>}
       </div>
       {open && (
         <>
-          <p className="text-xs text-gray-400 mb-4">⠿ でチームを掴んで、別グループのチーム名にドロップすると<b>入れ替え</b>できます（グループをまたぐ場合、該当グループの入力済み結果はクリアされます）。</p>
+          {!readOnly && <p className="text-xs text-gray-400 mb-4">⠿ でチームを掴んで、別グループのチーム名にドロップすると<b>入れ替え</b>できます（グループをまたぐ場合、該当グループの入力済み結果はクリアされます）。</p>}
           <div className="space-y-6">
             {groups.map((ids, gi) => (
-              <GroupTable key={gi} {...{ gi, ids, nameOf, getResult, setResult, standings, drag, setDrag, over, setOver, swapTeams, assign, setAssign, boards: cfg.boards }} />
+              <GroupTable key={gi} {...{ gi, ids, nameOf, getResult, setResult, standings, drag, setDrag, over, setOver, swapTeams, assign, setAssign, boards: cfg.boards, readOnly }} />
             ))}
           </div>
         </>
@@ -906,7 +973,7 @@ function RoundRobin({ groups, nameOf, getResult, setResult, standings, cfg, swap
     </div>
   );
 }
-function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, setDrag, over, setOver, swapTeams, assign, setAssign, boards }) {
+function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, setDrag, over, setOver, swapTeams, assign, setAssign, boards, readOnly }) {
   const st = standings(gi);
   const rankOf = Object.fromEntries(st.map((s, i) => [s.id, i + 1]));
   const statOf = Object.fromEntries(st.map(s => [s.id, s]));
@@ -972,13 +1039,13 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
                 <tr key={rid} className={`border-b border-gray-100 last:border-0 ${dragged ? 'opacity-40' : ''}`}>
                   <td className="py-2 px-2 text-center text-gray-400">{r + 1}</td>
                   <td className={`py-2 px-2 align-top group ${hovered ? 'bg-amber-50 ring-2 ring-amber-200' : ''}`}
-                    onDragOver={e => { if (drag) { e.preventDefault(); setOver(gi + ':' + rid); } }}
-                    onDragLeave={() => setOver(o => o === gi + ':' + rid ? null : o)}
-                    onDrop={e => { e.preventDefault(); if (drag) swapTeams(drag.gi, drag.id, gi, rid); setDrag(null); setOver(null); }}>
+                    onDragOver={readOnly ? undefined : e => { if (drag) { e.preventDefault(); setOver(gi + ':' + rid); } }}
+                    onDragLeave={readOnly ? undefined : () => setOver(o => o === gi + ':' + rid ? null : o)}
+                    onDrop={readOnly ? undefined : e => { e.preventDefault(); if (drag) swapTeams(drag.gi, drag.id, gi, rid); setDrag(null); setOver(null); }}>
                     <div className="w-44 font-medium leading-snug">
-                      <span draggable onDragStart={() => setDrag({ gi, id: rid })} onDragEnd={() => { setDrag(null); setOver(null); }}
+                      {!readOnly && <span draggable onDragStart={() => setDrag({ gi, id: rid })} onDragEnd={() => { setDrag(null); setOver(null); }}
                         title="ドラッグで入れ替え"
-                        className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-600 mr-1 select-none opacity-0 group-hover:opacity-100 transition">⠿</span>
+                        className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-600 mr-1 select-none opacity-0 group-hover:opacity-100 transition">⠿</span>}
                       {nameOf(rid)}
                     </div>
                   </td>
@@ -998,9 +1065,9 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
                     else if (playing) { inner = <span className="text-orange-600 font-bold text-xs">試合中</span>; cls = 'bg-orange-50'; }
                     else { inner = <span className={`font-bold ${isNext ? 'text-white' : 'text-gray-400'}`}>{circled(ord)}</span>; cls = isNext ? 'bg-blue-500' : ''; }
                     return (
-                      <td key={cid} onClick={() => { if (decided || playing) setEdit({ a: rid, b: cid }); else markPlaying(rid, cid); }}
+                      <td key={cid} onClick={readOnly ? undefined : () => { if (decided || playing) setEdit({ a: rid, b: cid }); else markPlaying(rid, cid); }}
                         style={style}
-                        className={`text-center text-base tabular-nums cursor-pointer hover:brightness-95 ${cls}`}>
+                        className={`text-center text-base tabular-nums ${readOnly ? '' : 'cursor-pointer hover:brightness-95'} ${cls}`}>
                         {inner}
                         {boardN && !decided && <div className="text-[10px] text-blue-700 font-bold leading-none mt-0.5">{boardN}番台</div>}
                       </td>
@@ -1016,7 +1083,7 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
         </table>
       </div>
 
-      {edit && (
+      {edit && !readOnly && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setEdit(null)}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-xs p-5" onClick={e => e.stopPropagation()}>
             <div className="text-center mb-4">
@@ -1125,7 +1192,7 @@ function BracketTab({ kind, title, groups, standings, nameOf, brk, setBrk, cfg, 
 }
 
 // ブラケット描画＋結果入力（共通部品）。明るいカード／全試合に名前／○で勝者・勝者は赤線／試合台バッジ。
-function BracketView({ b, nameOf, setWinner, setBoard, boards }) {
+function BracketView({ b, nameOf, setWinner, setBoard, boards, readOnly }) {
   const [bp, setBp] = useState(null); // 台ピッカーを開いている試合id
   const used = new Set(allMatches(b).filter(m => m.board && matchWinner(b, m) == null).map(m => m.board));
   return (
@@ -1141,13 +1208,13 @@ function BracketView({ b, nameOf, setWinner, setBoard, boards }) {
                 const decided = win && win !== 'BYE';
                 const adv = ri > 0 && ((aId && aId !== 'BYE') || (bId && bId !== 'BYE'));
                 const aReal = aId && aId !== 'BYE', bReal = bId && bId !== 'BYE';
-                const canBoard = setBoard && boards > 0 && aReal && bReal && !decided;
+                const canBoard = !readOnly && setBoard && boards > 0 && aReal && bReal && !decided;
                 const slot = (id, side) => {
                   const real = id && id !== 'BYE';
                   const isWin = real && win === id;
                   return (
-                    <button disabled={!real} onClick={() => setWinner(m.id, win === id ? null : side)}
-                      className={`bk-slot w-full flex items-center gap-1.5 px-2 py-1.5 text-sm text-left ${isWin ? 'bk-slot-win bg-emerald-50 text-emerald-700 font-bold' : (real ? 'text-gray-800 hover:bg-gray-50' : 'text-gray-400')}`}>
+                    <button disabled={!real || readOnly} onClick={readOnly ? undefined : () => setWinner(m.id, win === id ? null : side)}
+                      className={`bk-slot w-full flex items-center gap-1.5 px-2 py-1.5 text-sm text-left ${isWin ? 'bk-slot-win bg-emerald-50 text-emerald-700 font-bold' : (real ? 'text-gray-800' + (readOnly ? '' : ' hover:bg-gray-50') : 'text-gray-400')}`}>
                       <span className={`shrink-0 font-bold ${isWin ? 'text-emerald-500' : 'text-transparent'}`}>○</span>
                       <span className="truncate">{id === 'BYE' ? '― BYE ―' : (real ? nameOf(id) : '勝者待ち')}</span>
                     </button>
@@ -1176,6 +1243,9 @@ function BracketView({ b, nameOf, setWinner, setBoard, boards }) {
                         })}
                         <button onClick={() => { setBoard(m.id, null); setBp(null); }} className="!text-gray-500">なし</button>
                       </div>
+                    )}
+                    {readOnly && m.board && !decided && aReal && bReal && (
+                      <span className="bk-board set" style={{ cursor: 'default' }}>{m.board}</span>
                     )}
                   </div>
                 );
@@ -1362,6 +1432,73 @@ function Login() {
     </div>
   );
 }
+/* ---------- 公開進行ビュー（参加者向け・読み取り専用・?view=shareId） ---------- */
+function PublicView({ shareId }) {
+  const [snap, setSnap] = useState(undefined); // undefined=読込中 / null=見つからない / object=データ
+  const [updatedAt, setUpdatedAt] = useState(null);
+  const [tab, setTab] = useState('rr');
+  useEffect(() => {
+    if (!supa || !shareId) { setSnap(null); return; }
+    let alive = true;
+    const fetchSnap = async () => {
+      try {
+        const { data } = await supa.from('tournament_shares').select('data, updated_at').eq('id', shareId).maybeSingle();
+        if (!alive) return;
+        if (data && data.data) { setSnap(data.data); setUpdatedAt(data.updated_at); } else setSnap(null);
+      } catch (e) { if (alive) setSnap(null); }
+    };
+    fetchSnap();
+    const iv = setInterval(fetchSnap, 12000); // 自動リアルタイム（12秒ごと）
+    return () => { alive = false; clearInterval(iv); };
+  }, [shareId]);
+
+  if (snap === undefined) return <Splash text="読み込み中…" />;
+  if (!snap) return <Splash text="この公開ビューは見つかりませんでした。URLをご確認ください。" />;
+
+  const mode = snap.mode || 'doubles';
+  const cfg = snap.cfg || { store: '', boards: 8, groups: 4 };
+  const isS = mode === 'singles';
+  const ev = (isS ? snap.sgl : snap.dbl) || { teams: [], groups: [], rr: {}, brk: { winners: null, losers: null }, assign: {} };
+  const teams = ev.teams || [], groups = ev.groups || [], rr = ev.rr || {}, brk = ev.brk || { winners: null, losers: null }, assign = ev.assign || {};
+  const { nameOf, getResult, standings } = makeHelpers(teams, groups, rr);
+  const hasRR = !isS && groups.length > 0;
+  const hasBrk = !!(brk && (brk.winners || brk.losers));
+  const tabs = isS ? [['tournament', 'トーナメント']] : [['rr', '順位表'], ['tournament', 'トーナメント']];
+  const curTab = tabs.some(t => t[0] === tab) ? tab : tabs[0][0];
+  let fmt = '';
+  try { fmt = updatedAt ? new Date(updatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : ''; } catch (e) {}
+  return (
+    <div className="min-h-screen max-w-6xl mx-auto px-4 pb-24">
+      <header className="py-4 flex items-center gap-3 flex-wrap">
+        <span className="text-2xl">🎯</span>
+        <h1 className="text-lg font-bold tracking-tight">ハウストーナメント運営</h1>
+        {cfg.store && <span className="px-2 py-0.5 rounded bg-gray-200 text-sm text-gray-700">{cfg.store}</span>}
+        {teams.length > 0 && <span className="text-sm text-gray-400">{teams.length}{isS ? '人' : 'チーム'}{!isS ? ` / ${groups.length}グループ` : ''}</span>}
+        <span className="ml-auto flex items-center gap-2">
+          <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">公開ビュー（閲覧専用）</span>
+          {fmt && <span className="text-gray-400 text-xs">更新 {fmt}</span>}
+        </span>
+      </header>
+      <nav className="flex gap-5 border-b border-gray-200 mb-6">
+        {tabs.map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`pb-2.5 text-base border-b-2 -mb-px transition ${curTab === k ? 'border-gray-900 text-gray-900 font-bold' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>{label}</button>
+        ))}
+      </nav>
+      {curTab === 'rr' && (hasRR
+        ? <RoundRobin {...{ groups, nameOf, getResult, standings, cfg, assign, readOnly: true }} />
+        : <Empty msg="まだ順位表がありません。" />)}
+      {curTab === 'tournament' && (hasBrk ? (
+        isS
+          ? <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><BracketView b={brk.winners} nameOf={nameOf} boards={cfg.boards} readOnly /></div>
+          : <div className="space-y-6">
+            {brk.winners && <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><div className="text-sm font-bold text-emerald-700 mb-2">🏆 決勝トーナメント</div><BracketView b={brk.winners} nameOf={nameOf} boards={cfg.boards} readOnly /></div>}
+            {brk.losers && <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div><BracketView b={brk.losers} nameOf={nameOf} boards={cfg.boards} readOnly /></div>}
+          </div>
+      ) : <Empty msg="トーナメントはまだ作成されていません。" />)}
+    </div>
+  );
+}
 function Root() {
   const [session, setSession] = useState(AUTH_ENABLED ? undefined : null);
   const [ready, setReady] = useState(!AUTH_ENABLED);
@@ -1382,7 +1519,8 @@ function Root() {
   return <App key={session.user.id} session={session} />;
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+const VIEW_ID = (() => { try { return new URLSearchParams(window.location.search).get('view'); } catch (e) { return null; } })();
+ReactDOM.createRoot(document.getElementById('root')).render(VIEW_ID ? <PublicView shareId={VIEW_ID} /> : <Root />);
 </script>
 </body>
 </html>

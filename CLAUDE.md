@@ -8,7 +8,7 @@
 > 仕様・現状・実行方法・次の候補をまとめている。**作業前にこれを読めば現状がわかる**こと。
 
 ## 技術構成
-- **単一HTMLファイル `index.html`**（約1290行）。ビルド不要。React 18 + Babel standalone + Tailwind + **Supabase** をすべてCDNで読込、ブラウザ実行。
+- **単一HTMLファイル `index.html`**。ビルド不要。React 18 + Babel standalone + Tailwind + **Supabase** + **qrcodejs**（公開ビューのQR用）をすべてCDNで読込、ブラウザ実行。
 - 状態は **localStorage**（キー接頭辞 `darts_`）。Supabase接続時は**クラウド保存も併用**（後述）。
 - UIは **ライト（白地・罫線）テーマ**。
 - ユーザーは普段 **file://**（`index.html` を直接ダブルクリック）で確認。スクショ(preview_screenshot)はTailwind CDNで詰まりがちなので、検証は `preview_eval` のDOM評価＋`preview_console_logs` で行う。
@@ -55,10 +55,22 @@
 - `cloudLoad(uid)` = ローカルクリア後に自分のdataを反映 / `cloudSave(uid)` = `STATE_KEYS` をJSONでupsert（変更を1.5秒デバウンス）。`Root`(認証ラッパー) / `Login` / `Splash` コンポーネント。ヘッダーにメール表示＋ログアウト。
 - **アクセスは承認制（自己登録なし）**: `Login` はログイン専用UI（signUp廃止）。発行依頼は「アカウント発行を依頼する（フォーム）」リンク → **Googleフォーム** `ACCOUNT_REQUEST_URL`（オーナーのGoogleアカウントで作成、回答→メール通知ON、「リンクを知っている全員」可）。`ACCOUNT_REQUEST_URL` が空なら `ADMIN_EMAIL` への mailto にフォールバック。フォーム編集は当該Googleアカウントの Forms から（質問: お名前必須/連絡先メール必須/店舗名任意）。オーナーが **Supabase ダッシュボードでユーザーを手動作成**（Authentication → Users → Add user → **Auto Confirm User** でメール送信不要＝メール上限も回避）。**Supabase側で公開サインアップもOFF**にすること（Authentication → Sign In/Providers の「Allow new users to sign up」）。
 - **テストアカウント**: `t_suzuki@dart-ace.com`（メール確認済）。**パスワードはリポジトリに置かない**（オーナーのパスワードマネージャーで管理）。Supabaseは「Confirm email」ON。
-- `STATE_KEYS = [mode, cfg, pairs, singles, sNames, dbl, sgl]`（export/import JSON もこのキー）。
+- `STATE_KEYS = [mode, cfg, pairs, singles, sNames, dbl, sgl, checkin, shareId]`（export/import JSON もこのキー）。
+
+## 当日チェックイン（来場確認・個人ごと）
+- エントリー一覧の各個人に来場✓トグル。state = トップレベル `checkin{ personKey: true }`。personKey = `${pair.id}:a|b`（ペア）/ `sg:${i}`（相方募集）/ `sn:${i}`（シングルス名簿）。
+- 受付バナー＋ヘッダーに「受付 来場/事前 人数」。未チェック＝未来場。再振り分けしてもエントリー単位なので保持。`toggleCheckin(key)` / `checkinCount`・`entrantCount`。
+- 将来のLINE連携（エントリー名→自動チェックイン）もこのキーに立てる想定。
+
+## 参加者向け公開進行ビュー（`?view=shareId`・閲覧専用・自動更新）
+- 主催者の進行を参加者が**ログイン不要で閲覧**。render分岐 `VIEW_ID`（`?view=`）で `PublicView` を描画（認証スキップ）。`shareId` は初回生成しSTATE_KEYSで同期。
+- データ: 主催者ログイン中 `publishShare()` が `tournament_shares` に2秒デバウンスでupsert（自動公開）。`PublicView` は匿名キーで `tournament_shares` を**12秒ポーリング**。
+- 表示は既存 `RoundRobin`/`BracketView` を **`readOnly` プロップ**で再利用（編集ハンドラ全ガード・モーダル/ピッカー/ドラッグ/DEVボタン非表示・台は静的バッジ）。純粋ヘルパーは module-level `makeHelpers(teams,groups,rr)`。
+- 共有UI: 設定タブの `SharePanel`（公開URL＋コピー＋**QR**＝`qrcodejs`）。
+- **要Supabase**: `tournament_shares` テーブル＋RLS（匿名read可・所有者のみwrite）。SQLは `supabase-setup.sql`。未作成だと公開ビューは「見つかりません」表示。
 
 ## データモデル
-- 共有: `cfg{store, boards, groups}` / `pairs[{id,a,b}]` / `singles[name]`（相方募集中）/ `sNames[]`（シングルス名簿）/ `mode`
+- 共有: `cfg{store, boards, groups}` / `pairs[{id,a,b}]` / `singles[name]`（相方募集中）/ `sNames[]`（シングルス名簿）/ `mode` / `checkin{personKey:true}`（来場）/ `shareId`（公開ビューID）
 - イベント別 `dbl`/`sgl`: `teams[{id,name,members,solo}]` / `groups[[teamId,...]]` / `rr{gi:{"a_b":{a,b,sa,sb,winner}}}`（a<b正規化）/ `brk{winners,losers}`（各 `{rounds:[[match,...]]}`）/ `assign{matchId:boardNo}`
 
 ## 主要関数（index.html 内）
