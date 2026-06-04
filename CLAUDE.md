@@ -76,12 +76,20 @@
 - localStorage は端末ごと。Supabase未接続時の端末間移動はエクスポート/インポート。
 - Claude Code プレビューはユーザー実ブラウザと localStorage を共有しうる → UI操作で検証、テストデータは最後にクリア。
 
+## デプロイ（公開URL）
+- **本番URL: https://moko-04.github.io/darts-tournament/ **（GitHub Pages・main/root 配信・`.nojekyll`・HTTPS強制）。
+- リポジトリは **public**（公開鍵のみ・service_roleは無し。テストアカウントの旧PWは過去履歴に残るが公開前に削除済で無効）。
+- push で自動再ビルド（main へ push → Pages が再配信、約30秒）。ユーザーは普段 file:// でも確認可（CDN利用）。
+- ⚠️ **Supabase Authentication → URL Configuration を公開URLに合わせること**（確認メール／パスワードリセットのリンク用）:
+  - Site URL = `https://moko-04.github.io/darts-tournament/`
+  - Redirect URLs = `https://moko-04.github.io/darts-tournament/**`（ローカル併用なら `http://localhost:4321/**` も）
+
 ## フェーズ進行（自社利用 → 将来販売）
-- **フェーズ1（済）**: ログイン＋クラウド保存（Supabase）。動作確認済（店舗名マーカーが logout→login で保持されることを確認）。
+- **フェーズ1（済）**: ログイン＋クラウド保存（Supabase）。動作確認済。
+- **公開URLデプロイ（済）**: GitHub Pages（上記）。
 - **次にやる候補**:
-  1. **公開URLへデプロイ**（GitHub連携 Vercel か Netlify）＋ Supabase Authentication → URL Configuration の **Site URL / Redirect URLs を公開URLに設定**（確認メールリンク用）。
-  2. **アプリ内パスワード変更UI**（`supa.auth.updateUser`）。
-  3. 機能の壁打ち継続。
+  1. **アプリ内パスワード変更UI**（`supa.auth.updateUser`）。
+  2. 機能の壁打ち継続。
 - **フェーズ2（後）**: マルチテナントSaaS（RLSは既にuser単位。店舗/契約モデル＋ Stripe課金）。
 
 ## 未決の壁打ち候補
