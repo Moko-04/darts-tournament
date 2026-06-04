@@ -237,6 +237,12 @@ function App({ session }) {
   useEffect(() => save('dbl', dbl), [dbl]);
   useEffect(() => save('sgl', sgl), [sgl]);
 
+  // 旧キーの掃除：2イベント構成（dbl/sgl）移行前のトップレベル残骸を一度だけ削除。
+  // 取り込み（上の dbl 初期化のマイグレーション）は描画前に済み、dbl/sgl は保存effectで永続化されるので安全。
+  useEffect(() => {
+    ['teams', 'groups', 'rr', 'brk', 'assign', 'singlesNames'].forEach(k => localStorage.removeItem('darts_' + k));
+  }, []);
+
   // クラウド保存（ログイン時のみ・変更を1.5秒デバウンスして保存）
   useEffect(() => {
     if (!AUTH_ENABLED || !session) return;
