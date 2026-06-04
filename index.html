@@ -36,6 +36,11 @@
   .bk-slot-win::after { border-color:#ef4444 !important; z-index:1; }
   .bk-mg-out::after { border-color:#ef4444 !important; }
   .bk-mg-adv::before { background:#ef4444 !important; }
+  /* トーナメントの試合台バッジ＋ピッカー */
+  .bk-board { position:absolute; left:100%; top:calc(50% - 10px); transform:translateX(4px); z-index:4; min-width:20px; height:20px; padding:0 4px; font-size:11px; font-weight:700; line-height:18px; text-align:center; border-radius:10px; border:1px solid #bfdbfe; background:#fff; color:#93c5fd; cursor:pointer; }
+  .bk-board.set { background:#2563eb; color:#fff; border-color:#2563eb; }
+  .bk-picker { position:absolute; left:100%; top:50%; transform:translate(10px,-50%); z-index:30; background:#fff; border:1px solid #d1d5db; border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.15); padding:5px; display:flex; flex-wrap:wrap; gap:3px; width:148px; }
+  .bk-picker button { font-size:11px; line-height:1; height:26px; min-width:28px; padding:0 6px; border-radius:5px; border:1px solid #e5e7eb; background:#fff; color:#374151; }
 </style>
 </head>
 <body class="text-gray-900">
@@ -170,18 +175,23 @@ function namesToTeams(names) {
 }
 
 /* ---------- メイン ---------- */
-const TABS = [
+const TABS_D = [
   ['setup', '設定'],
   ['entry', 'エントリー'],
   ['groups', '組分け'],
   ['rr', 'ロビン表'],
   ['tournament', 'トーナメント'],
 ];
+const TABS_S = [
+  ['setup', '設定'],
+  ['entry', 'エントリー'],
+  ['tournament', 'トーナメント'],
+];
 
 function App() {
   const [tab, setTab] = useState('setup');
   const [mode, setMode] = useState(load('mode', 'doubles')); // 'doubles' | 'singles'
-  const [cfg, setCfg] = useState(load('cfg', { store: '', boards: 4, groups: 4 }));
+  const [cfg, setCfg] = useState(load('cfg', { store: '', boards: 8, groups: 4 }));
   // ダブルスのエントリー
   const [pairs, setPairs] = useState(load('pairs', []));     // [{id,a,b}]
   const [singles, setSingles] = useState(load('singles', [])); // [name] 相方募集中
@@ -239,11 +249,19 @@ function App() {
     return gs;
   };
   function generate() {
-    const ts = isS ? namesToTeams(sNames) : entriesToTeams(pairs, singles);
-    if (ts.length < 2) { alert(`2${unit}以上のエントリーが必要です。`); return; }
+    if (isS) { // シングルスは全員で1つのトーナメント
+      const seeds = sNames.map(s => (s || '').trim()).filter(Boolean);
+      if (seeds.length < 2) { alert('2人以上のエントリーが必要です。'); return; }
+      if (brk.winners && !confirm('既存のトーナメントを破棄して作り直しますか？')) return;
+      setBrk({ winners: buildBracket(seeds), losers: null });
+      setTab('tournament');
+      return;
+    }
+    const ts = entriesToTeams(pairs, singles);
+    if (ts.length < 2) { alert('2チーム以上のエントリーが必要です。'); return; }
     if (ts.length < cfg.groups * 2) {
       const maxG = Math.floor(ts.length / 2);
-      alert(`${cfg.groups}グループには最低${cfg.groups * 2}${unit}必要です（各組2${unit}以上）。\n現在 ${ts.length}${unit}。グループ数を ${maxG} 以下にするか、追加してください。`);
+      alert(`${cfg.groups}グループには最低${cfg.groups * 2}チーム必要です（各組2チーム以上・ダブルスは2名で1チーム）。\n現在 ${ts.length}チーム。グループ数を ${maxG} 以下にするか、追加してください。`);
       return;
     }
     setTeams(ts); setGroups(distribute(ts, cfg.groups));
@@ -337,13 +355,13 @@ function App() {
 
       <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-min">
         {[['doubles', 'ダブルス'], ['singles', 'シングルス']].map(([k, l]) => (
-          <button key={k} onClick={() => setMode(k)}
+          <button key={k} onClick={() => { setMode(k); if (k === 'singles' && (tab === 'groups' || tab === 'rr')) setTab('tournament'); }}
             className={`px-5 py-1.5 rounded-md text-sm font-bold whitespace-nowrap transition ${mode === k ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>{l}</button>
         ))}
       </div>
 
       <nav className="flex gap-5 overflow-x-auto scroll-x border-b border-gray-200 mb-6">
-        {TABS.map(([k, label]) => (
+        {(isS ? TABS_S : TABS_D).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`pb-2.5 text-base whitespace-nowrap border-b-2 -mb-px transition ${tab === k ? 'border-gray-900 text-gray-900 font-bold' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
             {label}
@@ -364,7 +382,7 @@ function App() {
         : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg }} />)}
       {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg, unit }} />}
       {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }} />}
-      {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult }} />}
+      {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames }} />}
     </div>
   );
 }
@@ -633,42 +651,56 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg }) {
   );
 }
 
-/* ---------- シングルス エントリー（個人名） ---------- */
+/* ---------- シングルス エントリー（個人名・行リスト） ---------- */
 function SinglesEntry({ sNames, setSNames, generate, cfg }) {
-  const [text, setText] = useState('');
-  const add = () => { const arr = text.split(/[\n,，、]/).map(s => s.trim()).filter(Boolean); if (arr.length) setSNames([...sNames, ...arr]); setText(''); };
-  const remove = i => setSNames(sNames.filter((_, k) => k !== i));
+  const [dragI, setDragI] = useState(null);
+  const [overI, setOverI] = useState(null);
+  const [bulk, setBulk] = useState('');
+  const update = (i, v) => setSNames(sNames.map((n, k) => k === i ? v : n));
+  const removeRow = i => setSNames(sNames.filter((_, k) => k !== i));
+  const addRow = () => setSNames([...sNames, '']);
+  const addBulk = () => { const arr = bulk.split(/[\n,，、]/).map(s => s.trim()).filter(Boolean); if (arr.length) { setSNames([...sNames, ...arr]); setBulk(''); } };
+  const move = (from, to) => { if (from == null || from === to) return; const a = sNames.slice(); const [x] = a.splice(from, 1); a.splice(to, 0, x); setSNames(a); };
+  const valid = sNames.filter(n => (n || '').trim()).length;
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
           <h2 className="font-bold">シングルス エントリー <span className="text-sm font-normal text-gray-400">（個人戦）</span></h2>
-          <span className="text-xs text-gray-400">{sNames.length}名</span>
+          <span className="text-xs text-gray-400">{valid}名</span>
         </div>
-        <div className="p-4 space-y-3">
-          <div className="flex gap-2">
-            <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }}
-              placeholder="名前を入力して Enter（改行・カンマで複数まとめて貼付も可）"
-              className="flex-1 bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
-            <button onClick={add} className="bg-gray-900 hover:bg-gray-700 text-white text-sm font-bold rounded-lg px-5">追加</button>
+        <div className="p-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+            {sNames.map((name, i) => (
+              <div key={i}
+                onDragOver={e => { if (dragI != null) { e.preventDefault(); setOverI(i); } }}
+                onDragLeave={() => setOverI(o => o === i ? null : o)}
+                onDrop={e => { e.preventDefault(); move(dragI, i); setDragI(null); setOverI(null); }}
+                className={`flex items-center gap-1.5 rounded ${overI === i ? 'ring-2 ring-amber-300' : ''} ${dragI === i ? 'opacity-40' : ''}`}>
+                <span className="text-gray-400 w-5 text-right text-xs tabular-nums">{i + 1}</span>
+                <span draggable onDragStart={() => setDragI(i)} onDragEnd={() => { setDragI(null); setOverI(null); }}
+                  title="ドラッグで並び替え" className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 select-none">⠿</span>
+                <input value={name} onChange={e => update(i, e.target.value)} placeholder="名前"
+                  className="flex-1 min-w-0 bg-gray-50 border border-gray-300 rounded px-2 py-1 text-sm" />
+                <button onClick={() => removeRow(i)} className="w-6 h-6 shrink-0 rounded text-gray-400 hover:bg-gray-100 hover:text-red-500">×</button>
+              </div>
+            ))}
           </div>
-          {sNames.length === 0 ? <p className="text-sm text-gray-300">まだいません</p> : (
-            <div className="flex flex-wrap gap-2">
-              {sNames.map((n, i) => (
-                <span key={i} className="inline-flex items-center gap-1 text-sm px-2.5 py-1 rounded-full bg-gray-100 border border-gray-200 text-gray-800">
-                  <span className="text-gray-400">{i + 1}.</span>{n}
-                  <button onClick={() => remove(i)} className="text-gray-400 hover:text-red-500">×</button>
-                </span>
-              ))}
+          <button onClick={addRow} className="mt-2 text-sm text-gray-600 hover:text-gray-900 border border-dashed border-gray-300 rounded-lg w-full py-1.5">＋ 追加</button>
+          <details className="mt-2">
+            <summary className="text-xs text-gray-400 cursor-pointer select-none">名簿をまとめて貼り付け</summary>
+            <div className="mt-2 flex gap-2 items-start">
+              <textarea value={bulk} onChange={e => setBulk(e.target.value)} rows={3} placeholder="改行・カンマ区切りで複数名" className="flex-1 bg-gray-50 border border-gray-300 rounded px-2 py-1 text-sm font-mono" />
+              <button onClick={addBulk} className="bg-gray-100 hover:bg-gray-200 text-sm rounded-lg px-3 py-1.5">追加</button>
             </div>
-          )}
+          </details>
         </div>
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center justify-between gap-3 flex-wrap">
-        <span className="text-sm text-gray-600">参加者 <b className="text-lg text-gray-900">{sNames.length}</b>名</span>
-        <button onClick={generate} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-lg px-6 py-2.5">グループに振り分け →</button>
+        <span className="text-sm text-gray-600">参加者 <b className="text-lg text-gray-900">{valid}</b>名</span>
+        <button onClick={generate} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-lg px-6 py-2.5">トーナメント作成 →</button>
       </div>
-      <p className="text-xs text-gray-400">※ {cfg.groups}グループにランダム配置 →「組分け」で手動調整。各組上位{advanceFor(cfg.groups)}人が決勝、残りがルーザー。</p>
+      <p className="text-xs text-gray-400">※ シングルスは参加者全員で1つの勝ち抜きトーナメントを作成します。</p>
     </div>
   );
 }
@@ -966,10 +998,12 @@ function BracketTab({ kind, title, groups, standings, nameOf, brk, setBrk, cfg, 
   );
 }
 
-// ブラケット描画＋結果入力（共通部品）。明るいカード／全試合に名前／○で勝者・勝者は赤線。
-function BracketView({ b, nameOf, setWinner }) {
+// ブラケット描画＋結果入力（共通部品）。明るいカード／全試合に名前／○で勝者・勝者は赤線／試合台バッジ。
+function BracketView({ b, nameOf, setWinner, setBoard, boards }) {
+  const [bp, setBp] = useState(null); // 台ピッカーを開いている試合id
+  const used = new Set(allMatches(b).filter(m => m.board && matchWinner(b, m) == null).map(m => m.board));
   return (
-    <div className="overflow-x-auto scroll-x pb-3">
+    <div className="overflow-x-auto scroll-x pb-3" onClick={() => setBp(null)}>
       <div className="bk">
         {b.rounds.map((round, ri) => (
           <div key={ri} className="bk-round">
@@ -980,6 +1014,8 @@ function BracketView({ b, nameOf, setWinner }) {
                 const win = matchWinner(b, m);
                 const decided = win && win !== 'BYE';
                 const adv = ri > 0 && ((aId && aId !== 'BYE') || (bId && bId !== 'BYE'));
+                const aReal = aId && aId !== 'BYE', bReal = bId && bId !== 'BYE';
+                const canBoard = setBoard && boards > 0 && aReal && bReal && !decided;
                 const slot = (id, side) => {
                   const real = id && id !== 'BYE';
                   const isWin = real && win === id;
@@ -997,6 +1033,24 @@ function BracketView({ b, nameOf, setWinner }) {
                       {slot(aId, 'a')}
                       {slot(bId, 'b')}
                     </div>
+                    {canBoard && (
+                      <button className={`bk-board ${m.board ? 'set' : ''}`} title="試合台を設定"
+                        onClick={e => { e.stopPropagation(); setBp(bp === m.id ? null : m.id); }}>
+                        {m.board ? m.board : '台'}
+                      </button>
+                    )}
+                    {canBoard && bp === m.id && (
+                      <div className="bk-picker" onClick={e => e.stopPropagation()}>
+                        {Array.from({ length: boards }, (_, i) => i + 1).map(n => {
+                          const taken = used.has(n) && m.board !== n;
+                          return (
+                            <button key={n} disabled={taken} onClick={() => { setBoard(m.id, m.board === n ? null : n); setBp(null); }}
+                              className={m.board === n ? '!bg-blue-600 !text-white !border-blue-600' : (taken ? '!bg-gray-100 !text-gray-300 line-through' : 'hover:bg-gray-50')}>{n}</button>
+                          );
+                        })}
+                        <button onClick={() => { setBoard(m.id, null); setBp(null); }} className="!text-gray-500">なし</button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1008,8 +1062,8 @@ function BracketView({ b, nameOf, setWinner }) {
   );
 }
 
-// 決勝＋ルーザーを1画面に。ロビン終了で自動作成。
-function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult }) {
+// ダブルス＝決勝＋ルーザー（ロビン終了で自動作成）／シングルス＝全員で1本
+function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames }) {
   let remaining = 0;
   groups.forEach((ids, gi) => { for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const r = getResult(gi, ids[i], ids[j]); if (!r || r.winner == null) remaining++; } });
   const rrComplete = groups.length > 0 && remaining === 0;
@@ -1021,13 +1075,29 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult 
     return seeds;
   };
   useEffect(() => {
-    if (!rrComplete) return;
+    if (isS || !rrComplete) return;
     if (!brk.winners || !brk.losers) setBrk(prev => ({ ...prev, winners: prev.winners || buildBracket(seedsFor('winners')), losers: prev.losers || buildBracket(seedsFor('losers')) }));
-  }, [rrComplete]);
-  const mkSetWinner = kind => (mid, side) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); findMatch(nb, mid).winner = side; return { ...prev, [kind]: nb }; });
-  const mkSetScore = kind => (mid, key, v) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); const m = findMatch(nb, mid); m[key] = Math.max(0, v); if (m.sa !== m.sb) m.winner = m.sa > m.sb ? 'a' : 'b'; return { ...prev, [kind]: nb }; });
-  const regen = () => { if (!confirm('現在のトーナメントを破棄して、今の順位で作り直しますか？')) return; setBrk(prev => ({ ...prev, winners: buildBracket(seedsFor('winners')), losers: buildBracket(seedsFor('losers')) })); };
+  }, [rrComplete, isS]);
+  const mkSetWinner = kind => (mid, side) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); const m = findMatch(nb, mid); m.winner = side; if (side != null) m.board = null; return { ...prev, [kind]: nb }; });
+  const mkSetBoard = kind => (mid, board) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); findMatch(nb, mid).board = board; return { ...prev, [kind]: nb }; });
 
+  if (isS) { // シングルス: 全員で1つのトーナメント
+    const regenS = () => { const seeds = sNames.map(s => (s || '').trim()).filter(Boolean); if (seeds.length < 2) { alert('2人以上必要です。'); return; } if (!confirm('トーナメントを作り直しますか？')) return; setBrk({ winners: buildBracket(seeds), losers: null }); };
+    if (!brk.winners) return <Empty msg="「エントリー」で参加者を入れて「トーナメント作成」を押してください。" />;
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold">シングルス トーナメント <span className="text-xs font-normal text-gray-400">（全員で1本）</span></h2>
+          <button onClick={regenS} className="text-xs text-gray-500 hover:text-gray-800 underline">組み直し</button>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
+          <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} />
+        </div>
+      </div>
+    );
+  }
+
+  const regen = () => { if (!confirm('現在のトーナメントを破棄して、今の順位で作り直しますか？')) return; setBrk(prev => ({ ...prev, winners: buildBracket(seedsFor('winners')), losers: buildBracket(seedsFor('losers')) })); };
   if (!groups.length) return <Empty msg="先にエントリーしてグループに振り分けてください。" />;
   if (!brk.winners && !brk.losers) return <Empty msg={`ラウンドロビンが終わると自動でトーナメントを作成します（残り ${remaining} 試合）。`} />;
   return (
@@ -1038,11 +1108,11 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult 
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
         <div className="text-sm font-bold text-emerald-700 mb-2">🏆 決勝トーナメント</div>
-        {brk.winners ? <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setScore={mkSetScore('winners')} /> : <p className="text-sm text-gray-400">作成待ち</p>}
+        {brk.winners ? <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} /> : <p className="text-sm text-gray-400">作成待ち</p>}
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
         <div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div>
-        {brk.losers ? <BracketView b={brk.losers} nameOf={nameOf} setWinner={mkSetWinner('losers')} setScore={mkSetScore('losers')} /> : <p className="text-sm text-gray-400">作成待ち</p>}
+        {brk.losers ? <BracketView b={brk.losers} nameOf={nameOf} setWinner={mkSetWinner('losers')} setBoard={mkSetBoard('losers')} boards={cfg.boards} /> : <p className="text-sm text-gray-400">作成待ち</p>}
       </div>
     </div>
   );
