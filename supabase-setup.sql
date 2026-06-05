@@ -89,3 +89,27 @@ create policy "self_entries owner delete" on public.self_entries
     select 1 from public.tournament_shares s
     where s.id = self_entries.share_id and s.user_id = auth.uid()
   ));
+
+
+-- ============================================================
+-- 大会履歴（過去の大会をアカウントごとに保存・後から閲覧）
+-- 1ユーザーに複数行。閲覧/保存/削除はすべて本人のみ（RLS）。
+-- ============================================================
+create table if not exists public.tournament_history (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  name       text not null,
+  data       jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+
+alter table public.tournament_history enable row level security;
+
+create policy "history select own" on public.tournament_history
+  for select using (auth.uid() = user_id);
+create policy "history insert own" on public.tournament_history
+  for insert with check (auth.uid() = user_id);
+create policy "history update own" on public.tournament_history
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "history delete own" on public.tournament_history
+  for delete using (auth.uid() = user_id);

@@ -101,6 +101,16 @@ async function submitSelfEntry(shareId, mode, nameA, nameB) {
   const { error } = await supa.from('self_entries').insert(row);
   if (error) throw error;
 }
+// 大会履歴（アカウントごと）
+function currentBlob() {
+  const blob = {};
+  ['mode', 'cfg', 'pairs', 'singles', 'sNames', 'dbl', 'sgl', 'checkin'].forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) try { blob[k] = JSON.parse(v); } catch (e) {} });
+  return blob;
+}
+async function saveHistory(userId, name, blob) { const { error } = await supa.from('tournament_history').insert({ user_id: userId, name, data: blob }); if (error) throw error; }
+async function listHistory(userId) { const { data } = await supa.from('tournament_history').select('id, name, created_at').eq('user_id', userId).order('created_at', { ascending: false }); return data || []; }
+async function getHistory(id) { const { data } = await supa.from('tournament_history').select('data, name, created_at').eq('id', id).maybeSingle(); return data || null; }
+async function deleteHistory(id) { const { error } = await supa.from('tournament_history').delete().eq('id', id); if (error) throw error; }
 function exportData() {
   const data = { _app: 'darts-tournament', _v: 1 };
   STATE_KEYS.forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) data[k] = JSON.parse(v); });
@@ -550,7 +560,12 @@ function App({ session }) {
         </div>
       )}
 
-      {tab === 'setup' && <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode, shareId }} />}
+      {tab === 'setup' && (
+        <div className="space-y-5">
+          <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode, shareId }} />
+          {AUTH_ENABLED && session && <HistoryPanel session={session} />}
+        </div>
+      )}
       {tab === 'entry' && (isS
         ? <SinglesEntry {...{ sNames, setSNames, generate, cfg, checkin, toggleCheckin, shareId }} />
         : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin, shareId }} />)}
@@ -1660,51 +1675,94 @@ function PublicStandings({ groups, standings, nameOf }) {
   );
 }
 
-/* ---------- 公開進行ビュー（参加者向け・読み取り専用・?view=shareId） ---------- */
-function PublicView({ shareId }) {
-  const [snap, setSnap] = useState(undefined); // undefined=読込中 / null=見つからない / object=データ
-  const [updatedAt, setUpdatedAt] = useState(null);
-  const [tab, setTab] = useState('rr');
+/* ---------- 過去の大会（履歴・アカウントごと） ---------- */
+function HistoryPanel({ session }) {
+  const [list, setList] = useState(null); // null=読込中
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [viewing, setViewing] = useState(null); // {data,name,created_at}
+  const uid = session.user.id;
+  const reload = async () => { try { setList(await listHistory(uid)); } catch (e) { setList([]); } };
   useEffect(() => {
-    if (!supa || !shareId) { setSnap(null); return; }
-    let alive = true;
-    const fetchSnap = async () => {
-      try {
-        const { data } = await supa.from('tournament_shares').select('data, updated_at').eq('id', shareId).maybeSingle();
-        if (!alive) return;
-        if (data && data.data) { setSnap(data.data); setUpdatedAt(data.updated_at); } else setSnap(null);
-      } catch (e) { if (alive) setSnap(null); }
-    };
-    fetchSnap();
-    const iv = setInterval(fetchSnap, 12000); // 自動リアルタイム（12秒ごと）
-    return () => { alive = false; clearInterval(iv); };
-  }, [shareId]);
+    reload();
+    let store = ''; try { store = (JSON.parse(localStorage.getItem('darts_cfg')) || {}).store || ''; } catch (e) {}
+    let d = ''; try { d = new Date().toLocaleDateString('ja-JP'); } catch (e) {}
+    setName(`${store ? store + ' ' : ''}${d}`.trim());
+  }, []);
+  const save = async () => {
+    setBusy(true); setMsg('');
+    try { await saveHistory(uid, name.trim() || '名称未設定', currentBlob()); setMsg('✓ 保存しました'); await reload(); }
+    catch (e) { setMsg('保存に失敗しました（履歴テーブル未作成の可能性）'); }
+    setBusy(false);
+  };
+  const view = async id => { try { const h = await getHistory(id); if (h) setViewing(h); } catch (e) {} };
+  const del = async (id, nm) => { if (!confirm(`「${nm}」を履歴から削除しますか？`)) return; try { await deleteHistory(id); await reload(); } catch (e) {} };
+  const fmtDate = s => { try { return new Date(s).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+      <div className="font-bold mb-1">📚 過去の大会（履歴）</div>
+      <p className="text-xs text-gray-400 mb-3">現在の大会を履歴に保存して、後から閲覧できます（このアカウントのみ）。</p>
+      <div className="flex gap-2 flex-wrap mb-2">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="保存名（例: 店名 6/7）"
+          className="flex-1 min-w-[160px] bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+        <button disabled={busy} onClick={save} className="bg-gray-900 hover:bg-gray-700 disabled:opacity-50 text-white text-sm font-bold rounded-lg px-4 py-2 whitespace-nowrap">現在の大会を保存</button>
+      </div>
+      {msg && <p className="text-xs text-gray-500 mb-2">{msg}</p>}
+      {list === null ? <p className="text-xs text-gray-400">読み込み中…</p>
+        : list.length === 0 ? <p className="text-xs text-gray-400">まだ保存された大会はありません。</p>
+          : <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg">
+            {list.map(h => (
+              <li key={h.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium truncate">{h.name}</div>
+                  <div className="text-[11px] text-gray-400">{fmtDate(h.created_at)}</div>
+                </div>
+                <button onClick={() => view(h.id)} className="shrink-0 text-xs border border-gray-300 rounded-lg px-3 py-1.5 text-gray-700 hover:bg-gray-50">表示</button>
+                <button onClick={() => del(h.id, h.name)} className="shrink-0 text-xs text-red-400 hover:text-red-600 px-2 py-1.5">削除</button>
+              </li>
+            ))}
+          </ul>}
+      {viewing && (
+        <div className="fixed inset-0 z-50 bg-gray-50 overflow-auto">
+          <div className="max-w-6xl mx-auto px-4 pb-24">
+            <div className="sticky top-0 bg-gray-50/95 backdrop-blur py-2 flex items-center justify-between z-10">
+              <span className="text-xs text-gray-400 truncate">履歴：{viewing.name}</span>
+              <button onClick={() => setViewing(null)} className="shrink-0 text-sm bg-gray-900 text-white rounded-lg px-4 py-1.5">✕ 閉じる</button>
+            </div>
+            <SnapshotView snap={viewing.data || {}} updatedAt={viewing.created_at} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
-  if (snap === undefined) return <Splash text="読み込み中…" />;
-  if (!snap) return <Splash text="この公開ビューは見つかりませんでした。URLをご確認ください。" />;
-
+/* ---------- スナップショット読み取り表示（公開ビュー／履歴 共通） ---------- */
+function SnapshotView({ snap, updatedAt, live }) {
+  const [tab, setTab] = useState('rr');
   const mode = snap.mode || 'doubles';
   const cfg = snap.cfg || { store: '', boards: 8, groups: 4 };
   const isS = mode === 'singles';
   const ev = (isS ? snap.sgl : snap.dbl) || { teams: [], groups: [], rr: {}, brk: { winners: null, losers: null }, assign: {} };
-  const teams = ev.teams || [], groups = ev.groups || [], rr = ev.rr || {}, brk = ev.brk || { winners: null, losers: null }, assign = ev.assign || {};
-  const { nameOf, getResult, standings } = makeHelpers(teams, groups, rr);
+  const teams = ev.teams || [], groups = ev.groups || [], rr = ev.rr || {}, brk = ev.brk || { winners: null, losers: null };
+  const { nameOf, standings } = makeHelpers(teams, groups, rr);
   const hasRR = !isS && groups.length > 0;
   const hasBrk = !!(brk && (brk.winners || brk.losers));
   const tabs = isS ? [['tournament', 'トーナメント']] : [['rr', '順位表'], ['tournament', 'トーナメント']];
   const curTab = tabs.some(t => t[0] === tab) ? tab : tabs[0][0];
   let fmt = '';
-  try { fmt = updatedAt ? new Date(updatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : ''; } catch (e) {}
+  try { fmt = updatedAt ? new Date(updatedAt).toLocaleString('ja-JP', live ? { hour: '2-digit', minute: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; } catch (e) {}
   return (
-    <div className="min-h-screen max-w-6xl mx-auto px-4 pb-24">
+    <>
       <header className="py-3 sm:py-4">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xl">🎯</span>
           <h1 className="text-base sm:text-lg font-bold tracking-tight truncate">{cfg.store || 'ハウストーナメント'}</h1>
-          <span className="text-[11px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium shrink-0">閲覧専用</span>
-          {fmt && <span className="text-gray-400 text-xs ml-auto shrink-0">更新 {fmt}</span>}
+          <span className="text-[11px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium shrink-0">{live ? '閲覧専用' : '履歴'}</span>
+          {fmt && <span className="text-gray-400 text-xs ml-auto shrink-0">{live ? '更新 ' : ''}{fmt}</span>}
         </div>
-        {teams.length > 0 && <p className="text-xs text-gray-400 mt-1">{teams.length}{isS ? '人' : 'チーム'}{!isS ? ` / ${groups.length}グループ` : ''} ・ 約12秒ごとに自動更新</p>}
+        {teams.length > 0 && <p className="text-xs text-gray-400 mt-1">{teams.length}{isS ? '人' : 'チーム'}{!isS ? ` / ${groups.length}グループ` : ''}{live ? ' ・ 約12秒ごとに自動更新' : ''}</p>}
       </header>
       <nav className="flex gap-5 border-b border-gray-200 mb-6">
         {tabs.map(([k, label]) => (
@@ -1723,6 +1781,35 @@ function PublicView({ shareId }) {
             {brk.losers && <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div><BracketView b={brk.losers} nameOf={nameOf} boards={cfg.boards} readOnly /></div>}
           </div>
       ) : <Empty msg="トーナメントはまだ作成されていません。" />)}
+    </>
+  );
+}
+
+/* ---------- 公開進行ビュー（参加者向け・読み取り専用・?view=shareId） ---------- */
+function PublicView({ shareId }) {
+  const [snap, setSnap] = useState(undefined); // undefined=読込中 / null=見つからない / object=データ
+  const [updatedAt, setUpdatedAt] = useState(null);
+  useEffect(() => {
+    if (!supa || !shareId) { setSnap(null); return; }
+    let alive = true;
+    const fetchSnap = async () => {
+      try {
+        const { data } = await supa.from('tournament_shares').select('data, updated_at').eq('id', shareId).maybeSingle();
+        if (!alive) return;
+        if (data && data.data) { setSnap(data.data); setUpdatedAt(data.updated_at); } else setSnap(null);
+      } catch (e) { if (alive) setSnap(null); }
+    };
+    fetchSnap();
+    const iv = setInterval(fetchSnap, 12000); // 自動リアルタイム（12秒ごと）
+    return () => { alive = false; clearInterval(iv); };
+  }, [shareId]);
+
+  if (snap === undefined) return <Splash text="読み込み中…" />;
+  if (!snap) return <Splash text="この公開ビューは見つかりませんでした。URLをご確認ください。" />;
+
+  return (
+    <div className="min-h-screen max-w-6xl mx-auto px-4 pb-24">
+      <SnapshotView snap={snap} updatedAt={updatedAt} live />
     </div>
   );
 }

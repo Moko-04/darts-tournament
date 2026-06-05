@@ -80,6 +80,12 @@
 - QRを使わない人は従来どおり手動入力＋✓（来場チェック）でOK（併用）。
 - **要Supabase**: `self_entries` テーブル＋RLS（匿名insert可・shareの所有者のみread/update/delete）。SQLは `supabase-setup.sql`。未作成だと受付ページはエラー、取込も走らない。
 
+## 大会履歴（過去の大会・アカウントごと）
+- 設定タブの `HistoryPanel`：保存名（既定＝店名＋日付）＋「現在の大会を保存」→ `saveHistory()` が現在の状態（`currentBlob()`＝mode/cfg/pairs/singles/sNames/dbl/sgl/checkin）を `tournament_history` にinsert。
+- 一覧（`listHistory`・新しい順）に名前/日時＋「表示」「削除」。表示＝全画面オーバーレイで `SnapshotView`（閲覧専用・順位表＋ブラケット）。
+- `SnapshotView({snap,updatedAt,live})` は**公開ビュー(`?view=`)と履歴で共通**の読み取り表示（`PublicView` も内部でこれを使う）。`live` で「閲覧専用/履歴」バッジと更新文言を出し分け。
+- **要Supabase**: `tournament_history(id,user_id,name,data,created_at)`＋RLS（本人のみ全操作）。SQLは `supabase-setup.sql`。未作成だと保存が失敗（パネルにメッセージ）。
+
 ## データモデル
 - 共有: `cfg{store, boards, groups}` / `pairs[{id,a,b}]` / `singles[name]`（相方募集中）/ `sNames[]`（シングルス名簿）/ `mode` / `checkin{personKey:true}`（来場）/ `shareId`（公開ビューID）
 - イベント別 `dbl`/`sgl`: `teams[{id,name,members,solo}]` / `groups[[teamId,...]]` / `rr{gi:{"a_b":{a,b,sa,sb,winner}}}`（a<b正規化）/ `brk{winners,losers}`（各 `{rounds:[[match,...]]}`）/ `assign{matchId:boardNo}`
