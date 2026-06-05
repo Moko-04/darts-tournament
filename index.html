@@ -1318,9 +1318,10 @@ function BracketTab({ kind, title, groups, standings, nameOf, brk, setBrk, cfg, 
 }
 
 // ブラケット描画＋結果入力（共通部品）。明るいカード／全試合に名前／○で勝者・勝者は赤線／試合台バッジ。
-function BracketView({ b, nameOf, setWinner, setBoard, boards, readOnly }) {
+function BracketView({ b, nameOf, setWinner, setBoard, boards, readOnly, usedBoards }) {
   const [bp, setBp] = useState(null); // 台ピッカーを開いている試合id
-  const used = new Set(allMatches(b).filter(m => m.board && matchWinner(b, m) == null).map(m => m.board));
+  // usedBoards（両ブラケット横断の使用中台）が渡されればそれを使う。無ければ自分のブラケット内のみ。
+  const used = usedBoards || new Set(allMatches(b).filter(m => m.board && matchWinner(b, m) == null).map(m => m.board));
   return (
     <div className="overflow-x-auto scroll-x pb-3" onClick={() => setBp(null)}>
       <div className="bk">
@@ -1422,6 +1423,9 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
   const regen = () => { if (!confirm('現在のトーナメントを破棄して、今の順位で作り直しますか？')) return; setBrk(prev => ({ ...prev, winners: buildBracket(seedsFor('winners')), losers: buildBracket(seedsFor('losers')) })); };
   if (!groups.length) return <Empty msg="先にエントリーしてグループに振り分けてください。" />;
   if (!brk.winners && !brk.losers) return <Empty msg={`ラウンドロビンが終わると自動でトーナメントを作成します（残り ${remaining} 試合）。`} />;
+  // 決勝・ルーザー両方で使用中の台（未確定試合に割当済み）。両ブラケットで重複させない。
+  const usedBoards = new Set();
+  ['winners', 'losers'].forEach(kind => { const bk = brk[kind]; if (bk) allMatches(bk).forEach(m => { if (m.board && matchWinner(bk, m) == null) usedBoards.add(m.board); }); });
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -1430,11 +1434,11 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
         <div className="text-sm font-bold text-emerald-700 mb-2">🏆 決勝トーナメント</div>
-        {brk.winners ? <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} /> : <p className="text-sm text-gray-400">作成待ち</p>}
+        {brk.winners ? <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} usedBoards={usedBoards} /> : <p className="text-sm text-gray-400">作成待ち</p>}
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
         <div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div>
-        {brk.losers ? <BracketView b={brk.losers} nameOf={nameOf} setWinner={mkSetWinner('losers')} setBoard={mkSetBoard('losers')} boards={cfg.boards} /> : <p className="text-sm text-gray-400">作成待ち</p>}
+        {brk.losers ? <BracketView b={brk.losers} nameOf={nameOf} setWinner={mkSetWinner('losers')} setBoard={mkSetBoard('losers')} boards={cfg.boards} usedBoards={usedBoards} /> : <p className="text-sm text-gray-400">作成待ち</p>}
       </div>
     </div>
   );
