@@ -471,9 +471,22 @@ function App({ session }) {
       setBrk({ winners: null, losers: null }); setAssign({});
     }
   }
-  function resetAll() {
-    if (!confirm('全データ（ダブルス・シングルス両方）を消去します。よろしいですか？')) return;
-    setPairs([]); setSingles([]); setSNames([]); setDbl(blank()); setSgl(blank()); setTab('setup');
+  async function resetAll() {
+    const loggedIn = AUTH_ENABLED && session;
+    const hasData = (dbl.teams && dbl.teams.length) || (sgl.teams && sgl.teams.length)
+      || (dbl.brk && dbl.brk.winners) || (sgl.brk && sgl.brk.winners)
+      || (sNames && sNames.some(n => (n || '').trim())) || (pairs && pairs.some(p => (p.a || '').trim() || (p.b || '').trim()));
+    const willArchive = loggedIn && hasData;
+    if (!confirm(willArchive
+      ? '現在の大会を履歴に自動保存してから、全データを消去します。よろしいですか？'
+      : '全データ（ダブルス・シングルス両方）を消去します。よろしいですか？')) return;
+    if (willArchive) {
+      let store = ''; try { store = cfg.store || ''; } catch (e) {}
+      let d = ''; try { d = new Date().toLocaleDateString('ja-JP'); } catch (e) {}
+      try { await saveHistory(session.user.id, `${store ? store + ' ' : ''}${d}`.trim() || '大会', currentBlob()); }
+      catch (e) { console.warn('auto-save history', e); if (!confirm('履歴への自動保存に失敗しました。それでも消去しますか？')) return; }
+    }
+    setPairs([]); setSingles([]); setSNames([]); setCheckin({}); setDbl(blank()); setSgl(blank()); setTab('setup');
   }
 
   function setResult(gi, a, b, patch) {
