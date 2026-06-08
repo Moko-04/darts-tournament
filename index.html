@@ -94,13 +94,6 @@ async function publishShare(userId, shareId) {
   try { await supa.from('tournament_shares').upsert({ id: shareId, user_id: userId, data: blob, updated_at: new Date().toISOString() }); }
   catch (e) { console.warn('publishShare', e); }
 }
-// QR自己エントリー（参加者・匿名insert）
-async function submitSelfEntry(shareId, mode, nameA, nameB) {
-  const row = { share_id: shareId, mode, name_a: nameA };
-  if (nameB) row.name_b = nameB;
-  const { error } = await supa.from('self_entries').insert(row);
-  if (error) throw error;
-}
 // 大会履歴（アカウントごと）
 function currentBlob() {
   const blob = {};
@@ -137,7 +130,7 @@ function importData(file) {
 }
 const GMARK = ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16'];
 const SEP = /[\s,，、・･\/／&＆\+]+/;
-const advanceFor = g => (g >= 5 ? 3 : 2); // 各組から決勝進出数: 4組→2 / 5組以上→3（固定）
+const advanceForSize = n => (n >= 5 ? 3 : 2); // 各組の決勝進出数: その組のチーム数で決定（5チーム以上→上位3 / 4チーム→上位2）
 const MIN_PER_GROUP = 4; // 各グループの最低チーム数（1組=ペア。各組は最低4チーム＝4組）
 const circled = n => (n >= 1 && n <= 20) ? String.fromCharCode(0x2460 + n - 1) : String(n);
 // 指定の対戦順（位置1始まり）。4名・5名はこの順に固定。
@@ -335,49 +328,6 @@ function App({ session }) {
     const t = setTimeout(() => publishShare(session.user.id, shareId), 2000);
     return () => clearTimeout(t);
   }, [session, shareId, mode, cfg, pairs, singles, sNames, dbl, sgl, checkin]);
-
-  // QR自己エントリーの自動取込（ログイン時・15秒ポーリング）。
-  // ・送信者(name_a)が既に名簿にいれば「その既存エントリーに来場チェック」だけ付ける（重複追加しない）
-  // ・いなければ名簿に追加し、本人(name_a)のみ来場チェック
-  // ・相方(name_b)はペア記録のみで来場チェックしない（相方は本人が別途チェックイン）
-  useEffect(() => {
-    if (!AUTH_ENABLED || !session || !shareId) return;
-    let alive = true;
-    const poll = async () => {
-      try {
-        const { data } = await supa.from('self_entries').select('*').eq('share_id', shareId).eq('merged', false);
-        if (!alive || !data || !data.length) return;
-        // 現在の名簿を localStorage から取得（クロージャの陳腐化を避ける）
-        const g = (k, d) => { try { const v = JSON.parse(localStorage.getItem('darts_' + k)); return v == null ? d : v; } catch (e) { return d; } };
-        const pairsNow = g('pairs', []), singlesNow = g('singles', []), sNamesNow = g('sNames', []);
-        const norm = s => (s || '').trim();
-        const keysToCheck = [];      // 既存エントリーの来場キー
-        const newPairs = [];         // 未マッチ（ダブルス）の新規ペア {id,a,b}
-        const newSNames = [];        // 未マッチ（シングルス）の新規名
-        for (const e of data) {
-          const nameA = norm(e.name_a); if (!nameA) continue;
-          if ((e.mode || 'doubles') === 'singles') {
-            const i = sNamesNow.findIndex(n => norm(n) === nameA);
-            if (i >= 0) keysToCheck.push(`sn:${i}`);
-            else { keysToCheck.push(`sn:${sNamesNow.length + newSNames.length}`); newSNames.push(nameA); }
-          } else {
-            let key = null;
-            for (const p of pairsNow) { if (norm(p.a) === nameA) { key = `${p.id}:a`; break; } if (norm(p.b) === nameA) { key = `${p.id}:b`; break; } }
-            if (!key) { const si = singlesNow.findIndex(n => norm(n) === nameA); if (si >= 0) key = `sg:${si}`; }
-            if (key) keysToCheck.push(key);
-            else { const id = uid(); newPairs.push({ id, a: nameA, b: norm(e.name_b) }); keysToCheck.push(`${id}:a`); } // 相方(b)はチェックしない
-          }
-        }
-        if (newPairs.length) setPairs(prev => [...prev, ...newPairs]);
-        if (newSNames.length) setSNames(prev => [...prev, ...newSNames]);
-        if (keysToCheck.length) setCheckin(c => { const n = { ...c }; keysToCheck.forEach(k => { n[k] = true; }); return n; });
-        await supa.from('self_entries').update({ merged: true }).in('id', data.map(e => e.id));
-      } catch (e) { console.warn('self_entries poll', e); }
-    };
-    poll();
-    const iv = setInterval(poll, 15000);
-    return () => { alive = false; clearInterval(iv); };
-  }, [session, shareId]);
 
   // アクティブなイベントの本体＋セッター（モードで切替）
   const ev = mode === 'doubles' ? dbl : sgl;
@@ -624,33 +574,6 @@ function CheckinSearch({ people, checkin, toggleCheckin }) {
   );
 }
 
-/* ---------- エントリー受付QR（参加者がセルフエントリー） ---------- */
-function EntryQR({ shareId }) {
-  const qrRef = React.useRef(null);
-  const [copied, setCopied] = useState(false);
-  const url = `${location.origin}${location.pathname}?entry=${shareId}`;
-  useEffect(() => {
-    if (qrRef.current && window.QRCode) { qrRef.current.innerHTML = ''; new window.QRCode(qrRef.current, { text: url, width: 140, height: 140, correctLevel: window.QRCode.CorrectLevel.M }); }
-  }, [url]);
-  const copy = async () => { try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) {} };
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-      <div className="font-bold mb-1">📱 QRでセルフエントリー受付</div>
-      <p className="text-xs text-gray-400 mb-3">参加者がこのQRを読み取って名前を送ると、<b>自動で名簿に追加＋来場（受付）</b>されます（取込は十数秒ごと）。QRを使わない人は下の手動入力＆✓でOK。</p>
-      <div className="flex gap-4 items-start">
-        <div ref={qrRef} className="border border-gray-100 rounded shrink-0 w-[140px] h-[140px] flex items-center justify-center" />
-        <div className="flex-1 min-w-0 space-y-2">
-          <input readOnly value={url} onFocus={e => e.target.select()} className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-xs" />
-          <div className="flex gap-2 flex-wrap">
-            <button onClick={copy} className="bg-gray-900 hover:bg-gray-700 text-white text-sm rounded-lg px-4 py-1.5">{copied ? '✓ コピー' : 'URLをコピー'}</button>
-            <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm border border-gray-300 rounded-lg px-4 py-1.5 text-gray-600 hover:bg-gray-50">開く</a>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ---------- 参加者向け公開リンク＋QR ---------- */
 function SharePanel({ shareId }) {
   const qrRef = React.useRef(null);
@@ -711,8 +634,8 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
       </div>
 
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm text-sm text-gray-600">
-        決勝進出：各組 <b className="text-gray-900">上位{advanceFor(cfg.groups)}チーム</b> が決勝トーナメント、残りがルーザートーナメント
-        <span className="text-gray-400 ml-1">（グループ数で自動：4組→2 / 5組以上→3）</span>
+        決勝進出：各組 <b className="text-gray-900">上位2チーム</b>（5チーム以上の組は上位3）が決勝トーナメント、残りがルーザートーナメント
+        <span className="text-gray-400 ml-1">（組の人数で自動：4チーム→上位2 / 5チーム以上→上位3）</span>
       </div>
 
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm flex items-center justify-between gap-3">
@@ -863,7 +786,6 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg, checkin
 
   return (
     <div className="space-y-5">
-      {shareId && <EntryQR shareId={shareId} />}
       {totalPeople > 0 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-sm flex items-center gap-x-3 gap-y-1 flex-wrap">
           <span className="font-bold text-emerald-700">受付（当日チェックイン）</span>
@@ -1001,7 +923,6 @@ function SinglesEntry({ sNames, setSNames, generate, cfg, checkin, toggleCheckin
   };
   return (
     <div className="space-y-4">
-      {shareId && <EntryQR shareId={shareId} />}
       {valid > 0 && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-sm flex items-center gap-x-3 gap-y-1 flex-wrap">
           <span className="font-bold text-emerald-700">受付（当日チェックイン）</span>
@@ -1060,7 +981,7 @@ function GroupEditor({ groups, nameOf, movePlayer, reshuffle, cfg }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <p className="text-sm text-gray-500">チームをドラッグして別グループへ移動できます。各組 <span className="text-emerald-700 font-medium">上位{advanceFor(cfg.groups)}→決勝</span> / <span className="text-amber-700 font-medium">残り→ルーザー</span></p>
+        <p className="text-sm text-gray-500">チームをドラッグして別グループへ移動できます。各組 <span className="text-emerald-700 font-medium">上位2→決勝</span>（5チーム以上の組は上位3）/ <span className="text-amber-700 font-medium">残り→ルーザー</span></p>
         <button onClick={reshuffle} className="bg-gray-100 hover:bg-gray-200 text-sm rounded-lg px-4 py-1.5">🔀 再シャッフル</button>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -1070,8 +991,9 @@ function GroupEditor({ groups, nameOf, movePlayer, reshuffle, cfg }) {
             onDragLeave={() => setOver(o => o === gi ? null : o)}
             onDrop={() => { if (drag) movePlayer(drag.id, drag.from, gi); setDrag(null); setOver(null); }}
             className={`rounded-xl border p-2 min-h-[120px] shadow-sm ${over === gi ? 'border-gray-900 bg-gray-50' : 'border-gray-200 bg-white'}`}>
-            <div className="text-xs font-bold text-gray-600 px-1 pb-2 flex justify-between">
-              <span>グループ {GMARK[gi]}</span><span className="text-gray-400">{ids.length}</span>
+            <div className="text-xs font-bold text-gray-600 px-1 pb-2 flex justify-between items-center">
+              <span>グループ {GMARK[gi]}</span>
+              <span className="flex items-center gap-1.5"><span className="text-emerald-700">上位{advanceForSize(ids.length)}→決勝</span><span className="text-gray-400 font-normal">{ids.length}</span></span>
             </div>
             <div className="space-y-1">
               {ids.map(id => (
@@ -1168,6 +1090,9 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
   const eOrd = edit ? orderMap[pkey(edit.a, edit.b)] : null;
   const eStatus = editRes && editRes.winner != null ? '終了' : (editRes && editRes.playing ? '試合中' : '予定');
   const eStatusCls = eStatus === '終了' ? 'bg-gray-100 text-gray-600' : (eStatus === '試合中' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700');
+  const isPlanned = eStatus === '予定';
+  // 台を選ぶ＝その台を割当＋（未確定なら）試合中にする。予定からの開始時はそのまま閉じる
+  const pickBoard = n => { setBoard(n); if (winnerId == null) markPlaying(edit.a, edit.b); if (isPlanned) setEdit(null); };
 
   return (
     <div>
@@ -1219,7 +1144,7 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
                     else if (playing) { inner = <span className="text-orange-600 font-bold text-xs">試合中</span>; cls = 'bg-orange-50'; }
                     else { inner = <span className={`font-bold ${isNext ? 'text-white' : 'text-gray-400'}`}>{circled(ord)}</span>; cls = isNext ? 'bg-blue-500' : ''; }
                     return (
-                      <td key={cid} onClick={readOnly ? undefined : () => { if (decided || playing) setEdit({ a: rid, b: cid }); else markPlaying(rid, cid); }}
+                      <td key={cid} onClick={readOnly ? undefined : () => setEdit({ a: rid, b: cid })}
                         style={style}
                         className={`text-center text-base tabular-nums ${readOnly ? '' : 'cursor-pointer hover:brightness-95'} ${cls}`}>
                         {inner}
@@ -1244,7 +1169,9 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
               <span className="text-xs text-gray-500">グループ {GMARK[gi]} ・ {circled(eOrd)}試合 </span>
               <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${eStatusCls}`}>{eStatus}</span>
             </div>
-            {[edit.a, edit.b].map(id => {
+            {isPlanned ? (
+              <div className="text-center text-sm text-gray-800 mb-1">{nameOf(edit.a)} <span className="text-gray-400 mx-1">vs</span> {nameOf(edit.b)}</div>
+            ) : [edit.a, edit.b].map(id => {
               const isWin = winnerId === id;
               const legs = legOf(id);
               return (
@@ -1257,25 +1184,25 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
               );
             })}
             <div className="mt-4">
-              <div className="text-xs text-gray-500 mb-1.5">試合台（ボード）</div>
+              <div className="text-xs text-gray-500 mb-1.5">{isPlanned ? '台を選んで試合開始' : '試合台（ボード）'}</div>
               <div className="flex flex-wrap gap-1.5">
-                <button onClick={() => setBoard(null)} className={`px-3 py-1.5 rounded-lg text-sm border ${assign[editGid] == null ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-300 text-gray-600'}`}>未割当</button>
+                <button onClick={() => pickBoard(null)} className={`px-3 py-1.5 rounded-lg text-sm border ${assign[editGid] == null ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-300 text-gray-600'}`}>{isPlanned ? '台未定で開始' : '未割当'}</button>
                 {Array.from({ length: boards }, (_, i) => i + 1).map(n => {
                   const cur = assign[editGid] === n;
                   const taken = Object.entries(assign).some(([k, v]) => v === n && k !== editGid);
                   return (
-                    <button key={n} disabled={taken} onClick={() => setBoard(n)}
+                    <button key={n} disabled={taken} onClick={() => pickBoard(n)}
                       className={`w-10 py-1.5 rounded-lg text-sm border ${cur ? 'bg-emerald-600 text-white border-emerald-600' : (taken ? 'bg-gray-100 border-gray-200 text-gray-300 line-through cursor-not-allowed' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50')}`}>
                       {n}
                     </button>
                   );
                 })}
               </div>
-              <p className="text-[11px] text-gray-400 mt-1">グレーの台は他の試合で使用中（選択不可）</p>
+              <p className="text-[11px] text-gray-400 mt-1">{isPlanned ? '台を選ぶと「試合中」になります。グレーの台は使用中。' : 'グレーの台は他の試合で使用中（選択不可）'}</p>
             </div>
             <div className="flex gap-2 mt-4">
-              <button onClick={resetMatch} className="flex-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm py-2.5">予定に戻す</button>
-              <button onClick={() => setEdit(null)} className="flex-1 rounded-lg bg-gray-900 hover:bg-gray-700 text-white text-sm font-bold py-2.5">閉じる</button>
+              {!isPlanned && <button onClick={resetMatch} className="flex-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm py-2.5">予定に戻す</button>}
+              <button onClick={() => setEdit(null)} className="flex-1 rounded-lg bg-gray-900 hover:bg-gray-700 text-white text-sm font-bold py-2.5">{isPlanned ? 'キャンセル' : '閉じる'}</button>
             </div>
           </div>
         </div>
@@ -1290,10 +1217,10 @@ function BracketTab({ kind, title, groups, standings, nameOf, brk, setBrk, cfg, 
   function seedsFor() {
     if (kind === 'singles') return singlesNames.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     const sts = groups.map((_, gi) => standings(gi));
-    const seeds = [];
-    const adv = advanceFor(cfg.groups);
-    if (kind === 'winners') { for (let r = 0; r < adv; r++) sts.forEach(s => { if (s[r]) seeds.push(s[r].id); }); }
-    else { const maxLen = Math.max(0, ...sts.map(s => s.length)); for (let r = adv; r < maxLen; r++) sts.forEach(s => { if (s[r]) seeds.push(s[r].id); }); }
+    const advOf = gi => advanceForSize(groups[gi].length);
+    const seeds = [], maxLen = Math.max(0, ...sts.map(s => s.length));
+    if (kind === 'winners') { const maxAdv = Math.max(0, ...groups.map((_, gi) => advOf(gi))); for (let r = 0; r < maxAdv; r++) sts.forEach((s, gi) => { if (r < advOf(gi) && s[r]) seeds.push(s[r].id); }); }
+    else { for (let r = 0; r < maxLen; r++) sts.forEach((s, gi) => { if (r >= advOf(gi) && s[r]) seeds.push(s[r].id); }); }
     return seeds;
   }
   function gen() {
@@ -1420,9 +1347,10 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
   const rrComplete = groups.length > 0 && remaining === 0;
   const seedsFor = kind => {
     const sts = groups.map((_, gi) => standings(gi));
-    const seeds = [], adv = advanceFor(cfg.groups);
-    if (kind === 'winners') { for (let r = 0; r < adv; r++) sts.forEach(s => { if (s[r]) seeds.push(s[r].id); }); }
-    else { const maxLen = Math.max(0, ...sts.map(s => s.length)); for (let r = adv; r < maxLen; r++) sts.forEach(s => { if (s[r]) seeds.push(s[r].id); }); }
+    const advOf = gi => advanceForSize(groups[gi].length); // 各組のチーム数で進出数が変わる
+    const seeds = [], maxLen = Math.max(0, ...sts.map(s => s.length));
+    if (kind === 'winners') { const maxAdv = Math.max(0, ...groups.map((_, gi) => advOf(gi))); for (let r = 0; r < maxAdv; r++) sts.forEach((s, gi) => { if (r < advOf(gi) && s[r]) seeds.push(s[r].id); }); }
+    else { for (let r = 0; r < maxLen; r++) sts.forEach((s, gi) => { if (r >= advOf(gi) && s[r]) seeds.push(s[r].id); }); }
     return seeds;
   };
   useEffect(() => {
@@ -1457,7 +1385,7 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold">トーナメント <span className="text-xs font-normal text-gray-400">（各組上位{advanceFor(cfg.groups)}→決勝 / 残り→ルーザー）</span></h2>
+        <h2 className="text-lg font-bold">トーナメント <span className="text-xs font-normal text-gray-400">（各組上位2→決勝・5チーム以上の組は上位3 / 残り→ルーザー）</span></h2>
         <button onClick={regen} className="text-xs text-gray-500 hover:text-gray-800 underline">今の順位で組み直し</button>
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
@@ -1590,63 +1518,6 @@ function Login() {
     </div>
   );
 }
-/* ---------- QR自己エントリー（参加者向け・?entry=shareId） ---------- */
-function SelfEntry({ shareId }) {
-  const [meta, setMeta] = useState(undefined); // undefined=読込中 / null=無効 / {store,mode}
-  const [a, setA] = useState('');
-  const [b, setB] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-  const [err, setErr] = useState('');
-  useEffect(() => {
-    if (!supa || !shareId) { setMeta(null); return; }
-    supa.from('tournament_shares').select('data').eq('id', shareId).maybeSingle()
-      .then(({ data }) => { if (data && data.data) setMeta({ store: (data.data.cfg || {}).store || '', mode: data.data.mode || 'doubles' }); else setMeta(null); })
-      .catch(() => setMeta(null));
-  }, [shareId]);
-  const submit = async e => {
-    e.preventDefault();
-    if (!a.trim()) { setErr('お名前を入力してください'); return; }
-    setBusy(true); setErr('');
-    try { await submitSelfEntry(shareId, meta ? meta.mode : 'doubles', a.trim(), (b || '').trim()); setDone(true); }
-    catch (ex) { setErr('送信に失敗しました。時間をおいて再度お試しください。'); }
-    setBusy(false);
-  };
-  if (meta === undefined) return <Splash text="読み込み中…" />;
-  if (meta === null) return <Splash text="この受付ページは見つかりませんでした。URL／QRをご確認ください。" />;
-  const isDbl = meta.mode === 'doubles';
-  return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-8">
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 w-full max-w-sm">
-        <div className="text-center mb-4">
-          <div className="text-3xl mb-1">🎯</div>
-          <h1 className="text-lg font-bold">{meta.store || 'ハウストーナメント'}</h1>
-          <p className="text-xs text-gray-400 mt-1">エントリー受付（{isDbl ? 'ダブルス' : 'シングルス'}）</p>
-        </div>
-        {done ? (
-          <div className="text-center space-y-3">
-            <div className="text-3xl">✅</div>
-            <p className="text-sm text-gray-700">エントリーを受け付けました。<br />受付が完了しています。</p>
-            <button onClick={() => { setA(''); setB(''); setDone(false); }} className="text-xs text-blue-600 hover:text-blue-800 underline">続けて別の人を登録</button>
-          </div>
-        ) : (
-          <form onSubmit={submit} className="space-y-3">
-            <input value={a} onChange={e => setA(e.target.value)} placeholder="お名前"
-              className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
-            {isDbl && <input value={b} onChange={e => setB(e.target.value)} placeholder="相方のお名前（決まっていれば）"
-              className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm" />}
-            {err && <p className="text-xs text-red-500">{err}</p>}
-            <button disabled={busy} type="submit" className="w-full bg-gray-900 hover:bg-gray-700 disabled:opacity-50 text-white font-bold rounded-lg py-2.5">
-              {busy ? '送信中…' : 'エントリーする'}
-            </button>
-            <p className="text-[11px] text-gray-400 text-center">{isDbl ? '相方が未定でもOK（後で組み合わせます）。' : '個人戦のエントリーです。'}送信すると受付（来場）されます。</p>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /* ---------- 公開ビュー用：スマホ向けコンパクト順位表 ---------- */
 function PublicStandings({ groups, standings, nameOf }) {
   if (!groups.length) return <Empty msg="まだ順位表がありません。" />;
@@ -1654,7 +1525,7 @@ function PublicStandings({ groups, standings, nameOf }) {
     <div className="space-y-4">
       {groups.map((ids, gi) => {
         const st = standings(gi);
-        const adv = advanceFor(groups.length);
+        const adv = advanceForSize(ids.length);
         return (
           <div key={gi} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 text-sm font-bold flex items-center justify-between">
@@ -1847,9 +1718,8 @@ function Root() {
 }
 
 const VIEW_ID = (() => { try { return new URLSearchParams(window.location.search).get('view'); } catch (e) { return null; } })();
-const ENTRY_ID = (() => { try { return new URLSearchParams(window.location.search).get('entry'); } catch (e) { return null; } })();
 ReactDOM.createRoot(document.getElementById('root')).render(
-  ENTRY_ID ? <SelfEntry shareId={ENTRY_ID} /> : VIEW_ID ? <PublicView shareId={VIEW_ID} /> : <Root />
+  VIEW_ID ? <PublicView shareId={VIEW_ID} /> : <Root />
 );
 </script>
 </body>

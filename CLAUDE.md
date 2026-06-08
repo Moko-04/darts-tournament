@@ -28,7 +28,7 @@
 ### ダブルス（tabs: 設定 / エントリー / 組分け / ロビン表 / トーナメント）
 - エントリー = ペア枠（選手A・B、行追加式）＋シングル枠（相方募集チップ、D&Dで相方指定/ペア化）。`entriesToTeams(pairs, singles)` で未ペアのシングルは自動ペア化。
 - 組分け = グループにランダム配置＋ドラッグで手動移動。**各組は最低4チーム**（`MIN_PER_GROUP=4`）。グループ数ステッパーは min2／max=floor(チーム数/4) で動的制限、`generate()`/`changeGroupCount` でも検証。例: 12チーム→最大3グループ。
-- ロビン表 = グループごと総当たり、罫線つき。決勝進出数は `advanceFor(cfg.groups)`（4組→2 / 5組以上→3）。
+- ロビン表 = グループごと総当たり、罫線つき。決勝進出数は **各組のチーム数** で決定：`advanceForSize(そのグループの人数)`（**4チーム→上位2 / 5チーム以上→上位3**）。グループごとに進出数が変わりうる（例: 5/4/4/4 なら 3/2/2/2＝決勝9・ルーザー8）。`seedsFor` は組ごとに上位を集めてインターリーブ。
 - トーナメント = 決勝＋ルーザー（ロビン終了で自動作成）。
 
 ### シングルス（tabs: **エントリー / トーナメント のみ**）
@@ -38,7 +38,9 @@
 
 ## ロビン表（ダブルス）
 - 罫線（`.rr-grid`）つき総当たり表。マスに対戦順 ①②③（4/5名は **`FIXED_SCHEDULES`** で指定順、他は `scheduleOrder` 円卓式）。
-- マスtap = 予定→試合中（オレンジ）、再tap = 結果入力ウィンドウ（+/−スコア＋試合台ピッカー）。次の試合は青、確定で台自動クリア（N番台バッジ）。
+- **次の試合＝青**。青（予定）マスtap = **台ピッカー**（対戦カード＋台選択のみ・スコア無し）→ **台を選ぶと「割当＋試合中＋自動で閉じる」**（`pickBoard`）。「台未定で開始」も可。
+- 試合中/終了マスtap = 結果入力ウィンドウ（+/−スコア＋試合台ピッカー＋「予定に戻す」）。確定で台自動クリア（N番台バッジ）。
+- モーダルは `eStatus`（予定/試合中/終了）で出し分け（`isPlanned` で開始モード ↔ 結果入力モード）。
 - 順位 = 勝 → 直接対決H2H → レッグ差。
 
 ## トーナメント
@@ -70,15 +72,10 @@
 - 共有UI: 設定タブの `SharePanel`（公開URL＋コピー＋**QR**＝`qrcodejs`）。
 - **要Supabase**: `tournament_shares` テーブル＋RLS（匿名read可・所有者のみwrite）。SQLは `supabase-setup.sql`。未作成だと公開ビューは「見つかりません」表示。
 
-## QR自己エントリー（`?entry=shareId`・参加者が名前送信→自動受付）
-- エントリータブ（`EntryTab`/`SinglesEntry`）に `EntryQR`（`?entry=shareId` のQR＋URL）。参加者がスマホで開く＝`SelfEntry` 画面（認証不要、render分岐 `ENTRY_ID`）。
-- 参加者は名前（ダブルスは相方も任意）を送信 → `submitSelfEntry()` が `self_entries` に**匿名insert**（mode付き）。
-- 主催者アプリは `self_entries`（merged=false）を**15秒ポーリング**し取込（取込後 `merged=true`）。現在の名簿は localStorage から読み名前照合：
-  - **送信者 name_a が既に名簿にいれば、その既存エントリーに来場チェックのみ**（重複追加しない）。照合先＝ダブルスは `pairs`(a/b)＋`singles`(相方募集)、シングルスは `sNames`。
-  - いなければ名簿に追加（ダブルス→`pairs` に `{id,a,b}`、シングルス→`sNames`）し、**本人 name_a のみ来場チェック**。
-  - **相方 name_b はペア記録のみ・来場チェックしない**（相方は本人が別途チェックイン）。
-- QRを使わない人は従来どおり手動入力＋✓（来場チェック）でOK（併用）。
-- **要Supabase**: `self_entries` テーブル＋RLS（匿名insert可・shareの所有者のみread/update/delete）。SQLは `supabase-setup.sql`。未作成だと受付ページはエラー、取込も走らない。
+## QR自己エントリー（廃止・2026-06）
+- 参加者がQRから名前送信→自動受付する機能は**削除**（`EntryQR`/`SelfEntry`/`submitSelfEntry`/`?entry=`取込ポーリング を撤去）。参加者向け通知は将来 LINE 等で再検討の方針（一旦保留）。
+- 受付は**手動チェックイン**（各行✓＋`CheckinSearch` 名前検索）に一本化。
+- DBの `self_entries` テーブル＋RLS は `supabase-setup.sql` に残置（復活時にそのまま使える。不要なら手動DROP可）。
 
 ## 大会履歴（過去の大会・アカウントごと）
 - 設定タブの `HistoryPanel`：保存名（既定＝店名＋日付）＋「現在の大会を保存」→ `saveHistory()` が現在の状態（`currentBlob()`＝mode/cfg/pairs/singles/sNames/dbl/sgl/checkin）を `tournament_history` にinsert。
@@ -92,7 +89,7 @@
 - イベント別 `dbl`/`sgl`: `teams[{id,name,members,solo}]` / `groups[[teamId,...]]` / `rr{gi:{"a_b":{a,b,sa,sb,winner}}}`（a<b正規化）/ `brk{winners,losers}`（各 `{rounds:[[match,...]]}`）/ `assign{matchId:boardNo}`
 
 ## 主要関数（index.html 内）
-- `advanceFor(g)` 決勝進出数 / `circled(n)` 丸数字 / `FIXED_SCHEDULES` 4・5名の対戦順 / `scheduleOrder(ids)` 円卓式
+- `advanceForSize(n)` 各組の決勝進出数（n=その組のチーム数。5以上→3 / 4以下→2） / `circled(n)` 丸数字 / `FIXED_SCHEDULES` 4・5名の対戦順 / `scheduleOrder(ids)` 円卓式
 - `entriesToTeams(pairs, singles)` / `namesToTeams(names)`（後者はほぼ未使用）
 - `buildBracket(seeds)` / `resolveSlot` / `matchWinner` トーナメント
 - `cloudLoad(uid)` / `cloudSave(uid)` / `exportData()` / `importData(file)`
