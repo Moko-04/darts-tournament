@@ -38,6 +38,12 @@
   .bk-slot-win::after { border-color:#ef4444 !important; z-index:1; }
   .bk-mg-out::after { border-color:#ef4444 !important; }
   .bk-mg-adv::before { background:#ef4444 !important; }
+  /* 優勝（決勝の勝者）列 */
+  .bk-mg-final::after { content:none !important; }
+  .bk-champ::before { left:-44px !important; width:44px !important; }
+  .bk-champ-box { position:relative; }
+  .bk-crown { position:absolute; left:0; right:0; bottom:calc(100% + 2px); font-size:22px; line-height:1; text-align:center; filter:drop-shadow(0 1px 1px rgba(0,0,0,.15)); }
+  .bk-card-champ { background:#fffbeb; border-color:#fbbf24; box-shadow:0 2px 10px rgba(251,191,36,.45); }
   /* トーナメントの試合台バッジ＋ピッカー */
   .bk-board { position:absolute; left:100%; top:calc(50% - 10px); transform:translateX(4px); z-index:4; min-width:20px; height:20px; padding:0 4px; font-size:11px; font-weight:700; line-height:18px; text-align:center; border-radius:10px; border:1px solid #bfdbfe; background:#fff; color:#93c5fd; cursor:pointer; }
   .bk-board.set { background:#2563eb; color:#fff; border-color:#2563eb; }
@@ -49,6 +55,7 @@
     .bk-round { min-width:120px; }
     .bk-slot { font-size:12px; padding-top:5px; padding-bottom:5px; }
     .bk-label { font-size:10px; }
+    .bk-champ::before { left:-26px !important; width:26px !important; }
   }
 </style>
 </head>
@@ -1273,10 +1280,15 @@ function BracketTab({ kind, title, groups, standings, nameOf, brk, setBrk, cfg, 
 }
 
 // ブラケット描画＋結果入力（共通部品）。明るいカード／全試合に名前／○で勝者・勝者は赤線／試合台バッジ。
-function BracketView({ b, nameOf, setWinner, setBoard, boards, readOnly, usedBoards }) {
+function BracketView({ b, nameOf, setWinner, setBoard, boards, readOnly, usedBoards, champTitle }) {
   const [bp, setBp] = useState(null); // 台ピッカーを開いている試合id
   // usedBoards（両ブラケット横断の使用中台）が渡されればそれを使う。無ければ自分のブラケット内のみ。
   const used = usedBoards || new Set(allMatches(b).filter(m => m.board && matchWinner(b, m) == null).map(m => m.board));
+  // 優勝者（決勝＝最終ラウンドの勝者）。champTitle が渡されたときだけ優勝列を表示
+  const finalRound = b.rounds[b.rounds.length - 1];
+  const finalMatch = finalRound && finalRound.length === 1 ? finalRound[0] : null;
+  const champWin = finalMatch ? matchWinner(b, finalMatch) : null;
+  const champId = champWin && champWin !== 'BYE' ? champWin : null;
   return (
     <div className="overflow-x-auto scroll-x pb-3" onClick={() => setBp(null)}>
       <div className="bk">
@@ -1303,7 +1315,7 @@ function BracketView({ b, nameOf, setWinner, setBoard, boards, readOnly, usedBoa
                   );
                 };
                 return (
-                  <div key={m.id} className={`bk-mg ${decided ? 'bk-mg-out' : ''} ${adv ? 'bk-mg-adv' : ''}`}>
+                  <div key={m.id} className={`bk-mg ${decided ? 'bk-mg-out' : ''} ${adv ? 'bk-mg-adv' : ''} ${champTitle && ri === b.rounds.length - 1 ? 'bk-mg-final' : ''}`}>
                     <div className="bk-card">
                       {slot(aId, 'a')}
                       {slot(bId, 'b')}
@@ -1335,6 +1347,21 @@ function BracketView({ b, nameOf, setWinner, setBoard, boards, readOnly, usedBoa
             </div>
           </div>
         ))}
+        {champTitle && (
+          <div className="bk-round bk-champ-round">
+            <div className="bk-label">{champTitle}</div>
+            <div className="bk-body">
+              <div className={`bk-mg bk-champ ${champId ? 'bk-mg-adv' : ''}`}>
+                <div className="bk-champ-box">
+                  {champId && <div className="bk-crown">👑</div>}
+                  <div className={`bk-card ${champId ? 'bk-card-champ' : ''}`} style={{ padding: '6px 10px', textAlign: 'center' }}>
+                    <span className={`text-sm font-bold ${champId ? 'text-amber-700' : 'text-gray-400'}`}>{champId ? nameOf(champId) : '優勝者待ち'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1370,7 +1397,7 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
           <button onClick={regenS} className="text-xs text-gray-500 hover:text-gray-800 underline">組み直し</button>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
-          <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} />
+          <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} champTitle="優勝" />
         </div>
       </div>
     );
@@ -1390,7 +1417,7 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
         <div className="text-sm font-bold text-emerald-700 mb-2">🏆 決勝トーナメント</div>
-        {brk.winners ? <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} usedBoards={usedBoards} /> : <p className="text-sm text-gray-400">作成待ち</p>}
+        {brk.winners ? <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} usedBoards={usedBoards} champTitle="優勝" /> : <p className="text-sm text-gray-400">作成待ち</p>}
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
         <div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div>
@@ -1659,9 +1686,9 @@ function SnapshotView({ snap, updatedAt, live }) {
         : <Empty msg="まだ順位表がありません。" />)}
       {curTab === 'tournament' && (hasBrk ? (
         isS
-          ? <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><BracketView b={brk.winners} nameOf={nameOf} boards={cfg.boards} readOnly /></div>
+          ? <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><BracketView b={brk.winners} nameOf={nameOf} boards={cfg.boards} readOnly champTitle="優勝" /></div>
           : <div className="space-y-6">
-            {brk.winners && <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><div className="text-sm font-bold text-emerald-700 mb-2">🏆 決勝トーナメント</div><BracketView b={brk.winners} nameOf={nameOf} boards={cfg.boards} readOnly /></div>}
+            {brk.winners && <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><div className="text-sm font-bold text-emerald-700 mb-2">🏆 決勝トーナメント</div><BracketView b={brk.winners} nameOf={nameOf} boards={cfg.boards} readOnly champTitle="優勝" /></div>}
             {brk.losers && <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div><BracketView b={brk.losers} nameOf={nameOf} boards={cfg.boards} readOnly /></div>}
           </div>
       ) : <Empty msg="トーナメントはまだ作成されていません。" />)}
