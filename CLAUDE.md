@@ -80,6 +80,7 @@
 
 ## 大会履歴（過去の大会・アカウントごと）
 - 設定タブの `HistoryPanel`：保存名（既定＝店名＋日付）＋「現在の大会を保存」→ `saveHistory()` が現在の状態（`currentBlob()`＝mode/cfg/pairs/singles/sNames/dbl/sgl/checkin）を `tournament_history` にinsert。
+- **トーナメントタブ下部の「🏁 大会を終了して保存」**（`FinishBar`、両モード）も同じ `saveHistory(currentBlob())` を呼ぶ（名前＝店名＋日付）。終了＝保存のみ（データは消さない。クリアは設定の「全データをリセット」）。`TournamentTab` に `session` を渡して使用。
 - 一覧（`listHistory`・新しい順）に名前/日時＋「表示」「削除」。表示＝全画面オーバーレイで `SnapshotView`（閲覧専用・順位表＋ブラケット）。
 - `SnapshotView({snap,updatedAt,live})` は**公開ビュー(`?view=`)と履歴で共通**の読み取り表示（`PublicView` も内部でこれを使う）。`live` で「閲覧専用/履歴」バッジと更新文言を出し分け。
 - **自動保存**：`resetAll`（全データをリセット）時、ログイン中＆中身がある場合は消去前に履歴へ自動保存（`saveHistory`）。保存失敗時は「それでも消去するか」を再確認（データ消失防止）。リセットは `checkin` もクリア。

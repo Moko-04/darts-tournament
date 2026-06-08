@@ -541,7 +541,7 @@ function App({ session }) {
         : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin, shareId }} />)}
       {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg, unit }} />}
       {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }} />}
-      {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames }} />}
+      {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames, session }} />}
     </div>
   );
 }
@@ -1367,8 +1367,34 @@ function BracketView({ b, nameOf, setWinner, setBoard, boards, readOnly, usedBoa
   );
 }
 
+// 大会終了ボタン（押すと現在の大会を「大会履歴」へ保存）
+function FinishBar({ session, cfg }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  if (!(AUTH_ENABLED && session)) return null; // クラウド未接続なら非表示
+  const finish = async () => {
+    if (!confirm('この大会を終了して「大会履歴」に保存します。よろしいですか？')) return;
+    setBusy(true); setMsg('');
+    let d = ''; try { d = new Date().toLocaleDateString('ja-JP'); } catch (e) {}
+    const store = (cfg && cfg.store) || '';
+    try { await saveHistory(session.user.id, `${store ? store + ' ' : ''}${d}`.trim() || '大会', currentBlob()); setMsg('✓ 大会履歴に保存しました'); }
+    catch (e) { setMsg('⚠ 保存に失敗しました。時間をおいて再度お試しください。'); }
+    setBusy(false);
+  };
+  return (
+    <div className="flex flex-col items-center gap-2 pt-3 pb-1">
+      <button disabled={busy} onClick={finish}
+        className="rounded-lg px-6 py-2.5 text-sm font-bold text-white bg-gray-900 hover:bg-gray-700 disabled:opacity-60">
+        {busy ? '保存中…' : '🏁 大会を終了して保存'}
+      </button>
+      {msg && <p className={`text-xs ${msg[0] === '✓' ? 'text-emerald-600' : 'text-red-500'}`}>{msg}</p>}
+      <p className="text-[11px] text-gray-400">保存した大会は設定タブの「大会履歴」から閲覧できます。</p>
+    </div>
+  );
+}
+
 // ダブルス＝決勝＋ルーザー（ロビン終了で自動作成）／シングルス＝全員で1本
-function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames }) {
+function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames, session }) {
   let remaining = 0;
   groups.forEach((ids, gi) => { for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const r = getResult(gi, ids[i], ids[j]); if (!r || r.winner == null) remaining++; } });
   const rrComplete = groups.length > 0 && remaining === 0;
@@ -1399,6 +1425,7 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
           <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} champTitle="優勝" />
         </div>
+        <FinishBar session={session} cfg={cfg} />
       </div>
     );
   }
@@ -1423,6 +1450,7 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
         <div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div>
         {brk.losers ? <BracketView b={brk.losers} nameOf={nameOf} setWinner={mkSetWinner('losers')} setBoard={mkSetBoard('losers')} boards={cfg.boards} usedBoards={usedBoards} /> : <p className="text-sm text-gray-400">作成待ち</p>}
       </div>
+      <FinishBar session={session} cfg={cfg} />
     </div>
   );
 }
