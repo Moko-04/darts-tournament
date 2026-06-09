@@ -97,8 +97,8 @@
 - `cloudLoad(uid)` / `cloudSave(uid)` / `exportData()` / `importData(file)`
 
 ## 開発用
-- `DEV_SEED=true` ＋ `DEV_PAIRS`(17組) ＋ `DEV_SINGLES`(16名)。空なら自動投入、設定タブに「投入(やり直し)」、ロビン表ヘッダーに「🧪全試合ランダム結果」ボタン。
-- **公開/販売前に `DEV_SEED=false`** にすること。
+- `DEV_SEED` ＋ `DEV_PAIRS`(17組) ＋ `DEV_SINGLES`(16名)。`true` のとき空なら自動投入、設定タブに「投入(やり直し)」、ロビン表ヘッダーに「🧪全試合ランダム結果」ボタンを表示。
+- **2026-06 に `DEV_SEED=false`（本番運用）に変更済**。開発で再びテストデータが欲しいときだけ一時的に `true` に戻す。`false` の間は自動投入もDEVボタンも無し。
 - `test-17.json` = 17ペアのimport用フィクスチャ。
 
 ## 注意点・既知の仕様
