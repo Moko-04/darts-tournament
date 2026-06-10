@@ -21,7 +21,7 @@
 
 ## 3イベント構成（モード切替）
 画面上部トグルで **ダブルス / シングルス / シングルストーナメント** を切替（`mode = 'doubles' | 'singlesrr' | 'singles'`）。
-- 共有state = `cfg{store, boards, groups}`。エントリー名簿：ダブルス=`pairs`+`singles`／シングルス2モードは **`sNames` を共有**（同じ人で両方式を回せる）。
+- 共有state = `cfg{store, boards, groups, groupsS}`（store/boardsは全モード共有。**グループ数はモード別**：`cfg.groups`=ダブルス／`cfg.groupsS`=シングルスsinglesrr）。アクティブ値は `groupCount = mode==='doubles'?cfg.groups:(cfg.groupsS??4)`、変更は `setGroupCount(v)`。エントリー名簿：ダブルス=`pairs`+`singles`／シングルス2モードは **`sNames` を共有**（同じ人で両方式を回せる）。
 - イベント別state = `dbl`（doubles）/ `sglR`（**新**singlesrr）/ `sgl`（singles＝ノックアウト）＝各 `{teams, groups, rr, brk:{winners,losers}, assign}`。
 - アクティブイベント参照: `ev = mode==='doubles'?dbl : mode==='singlesrr'?sglR : sgl`。`teams/groups/rr/brk/assign` と setter はこの `ev` を指す（既存関数が全モードで動く）。
 - **`isS = mode==='singles'`（=ノックアウト判定。意味は不変）／`indiv = mode!=='doubles'`（=個人戦、unit='人'）**。タブは `isS ? TABS_S : TABS_D`（doublesとsinglesrrは同じTABS_D、singlesだけTABS_S）。
@@ -92,7 +92,7 @@
 - **要Supabase**: `tournament_history(id,user_id,name,data,created_at)`＋RLS（本人のみ全操作）。SQLは `supabase-setup.sql`。未作成だと保存が失敗（パネルにメッセージ）。
 
 ## データモデル
-- 共有: `cfg{store, boards, groups}` / `pairs[{id,a,b}]` / `singles[name]`（相方募集中）/ `sNames[]`（シングルス名簿・**singlesrrとsinglesで共有**）/ `mode`（'doubles'|'singlesrr'|'singles'）/ `checkin{personKey:true}`（来場）/ `shareId`（公開ビューID）
+- 共有: `cfg{store, boards, groups(ダブルス), groupsS(シングルスsinglesrr)}` / `pairs[{id,a,b}]` / `singles[name]`（相方募集中）/ `sNames[]`（シングルス名簿・**singlesrrとsinglesで共有**）/ `mode`（'doubles'|'singlesrr'|'singles'）/ `checkin{personKey:true}`（来場）/ `shareId`（公開ビューID）
 - イベント別 `dbl`/`sglR`/`sgl`: `teams[{id,name,members,solo}]` / `groups[[teamId,...]]` / `rr{gi:{"a_b":{a,b,sa,sb,winner}}}`（a<b正規化）/ `brk{winners,losers}`（各 `{rounds:[[match,...]]}`）/ `assign{matchId:boardNo}`。singlesrrは `namesToTeams(sNames)` で1人1チーム化。公開/履歴スナップショットも `mode` で `dbl/sglR/sgl` を出し分け。
 
 ## 主要関数（index.html 内）

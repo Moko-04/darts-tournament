@@ -348,6 +348,9 @@ function App({ session }) {
   const teams = ev.teams, groups = ev.groups, rr = ev.rr, brk = ev.brk, assign = ev.assign;
   const setTeams = v => upd('teams', v), setGroups = v => upd('groups', v), setRr = v => upd('rr', v), setBrk = v => upd('brk', v), setAssign = v => upd('assign', v);
   const isS = mode === 'singles', indiv = mode !== 'doubles', unit = indiv ? '人' : 'チーム';
+  // グループ数はモード別：ダブルス=cfg.groups／シングルス(singlesrr)=cfg.groupsS
+  const groupCount = mode === 'doubles' ? cfg.groups : (cfg.groupsS == null ? 4 : cfg.groupsS);
+  const setGroupCount = v => setCfg(c => mode === 'doubles' ? { ...c, groups: v } : { ...c, groupsS: v });
 
   // 当日チェックイン（来場確認）
   const toggleCheckin = key => setCheckin(c => { const n = { ...c }; if (n[key]) delete n[key]; else n[key] = true; return n; });
@@ -395,18 +398,18 @@ function App({ session }) {
     const ts = mode === 'singlesrr' ? namesToTeams(sNames) : entriesToTeams(pairs, singles);
     if (ts.length < 2) { alert(`2${unit}以上のエントリーが必要です。`); return; }
     const mpg = minPerGroup(mode);
-    if (ts.length < cfg.groups * mpg) {
+    if (ts.length < groupCount * mpg) {
       const maxG = Math.max(1, Math.floor(ts.length / mpg));
-      alert(`${cfg.groups}グループには最低${cfg.groups * mpg}${unit}必要です（各組${mpg}${unit}以上${mode === 'doubles' ? '・ダブルスは2名で1チーム' : ''}）。\n現在 ${ts.length}${unit}。グループ数を ${maxG} 以下にするか、追加してください。`);
+      alert(`${groupCount}グループには最低${groupCount * mpg}${unit}必要です（各組${mpg}${unit}以上${mode === 'doubles' ? '・ダブルスは2名で1チーム' : ''}）。\n現在 ${ts.length}${unit}。グループ数を ${maxG} 以下にするか、追加してください。`);
       return;
     }
-    setTeams(ts); setGroups(distribute(ts, cfg.groups));
+    setTeams(ts); setGroups(distribute(ts, groupCount));
     setRr({}); setBrk({ winners: null, losers: null }); setAssign({});
     setTab('groups');
   }
   function reshuffle() {
     if (rr && Object.keys(rr).length && !confirm('組をシャッフルすると入力済みのロビン結果は消えます。よろしいですか？')) return;
-    setGroups(distribute(teams, cfg.groups)); setRr({}); setBrk({ ...brk, winners: null, losers: null }); setAssign({});
+    setGroups(distribute(teams, groupCount)); setRr({}); setBrk({ ...brk, winners: null, losers: null }); setAssign({});
   }
   // グループ数を変更したら、既にチームがあれば即座に再振り分け（設定と組分けを常に一致させる）
   function changeGroupCount(v) {
@@ -417,7 +420,7 @@ function App({ session }) {
     }
     const hasResults = rr && Object.keys(rr).length > 0;
     if (teams.length && hasResults && !confirm('グループ数を変えると入力済みのロビン結果は消え、再振り分けされます。よろしいですか？')) return;
-    setCfg({ ...cfg, groups: v });
+    setGroupCount(v);
     if (teams.length) { setGroups(distribute(teams, v)); setRr({}); setBrk({ winners: null, losers: null }); setAssign({}); }
   }
   const movePlayer = (id, from, to) => { if (from === to) return; setGroups(gs => { const n = gs.map(a => a.slice()); n[from] = n[from].filter(x => x !== id); n[to].push(id); return n; }); };
@@ -530,16 +533,16 @@ function App({ session }) {
         ))}
       </nav>
 
-      {teams.length > 0 && groups.length !== cfg.groups && (
+      {teams.length > 0 && groups.length !== groupCount && (
         <div className="mb-4 bg-amber-50 border border-amber-300 rounded-lg px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap">
-          <span className="text-sm text-amber-800">⚠️ 現在の組分けは <b>{groups.length}グループ</b> ですが、設定は <b>{cfg.groups}グループ</b> です。</span>
-          <button onClick={reshuffle} className="bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg px-3 py-1.5 whitespace-nowrap">{cfg.groups}グループで再振り分け</button>
+          <span className="text-sm text-amber-800">⚠️ 現在の組分けは <b>{groups.length}グループ</b> ですが、設定は <b>{groupCount}グループ</b> です。</span>
+          <button onClick={reshuffle} className="bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg px-3 py-1.5 whitespace-nowrap">{groupCount}グループで再振り分け</button>
         </div>
       )}
 
       {tab === 'setup' && (
         <div className="space-y-5">
-          <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode, shareId }} />
+          <Setup {...{ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode, shareId, groupCount }} />
           {AUTH_ENABLED && session && <HistoryPanel session={session} />}
         </div>
       )}
@@ -620,7 +623,7 @@ function SharePanel({ shareId }) {
 }
 
 /* ---------- 設定 ---------- */
-function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode, shareId }) {
+function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTestData, mode, shareId, groupCount }) {
   const Step = ({ label, val, set, min, max, hint }) => (
     <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
       <div className="text-sm text-gray-500 mb-2">{label}</div>
@@ -645,7 +648,7 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
 
       <div className="grid grid-cols-2 gap-3">
         <Step label="🎯 台数（ボード）" val={cfg.boards} set={v => setCfg({ ...cfg, boards: v })} min={1} max={20} hint="設置台数" />
-        <Step label="🧩 グループ数" val={cfg.groups} set={changeGroupCount} min={2} max={maxGroups} hint={`各組${mpg}${mode === 'doubles' ? 'チーム' : '人'}以上`} />
+        <Step label="🧩 グループ数" val={groupCount} set={changeGroupCount} min={2} max={maxGroups} hint={`各組${mpg}${mode === 'doubles' ? 'チーム' : '人'}以上`} />
       </div>
 
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm text-sm text-gray-600">
