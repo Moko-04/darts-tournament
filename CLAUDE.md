@@ -19,22 +19,27 @@
 - または `index.html` をブラウザ（Chrome）で直接開く（CDN利用のためネット必要）
 - Claude Code プレビュー: `.claude/launch.json` の `darts`（node server.js / port 4321）。
 
-## 2イベント構成（モード切替）
-画面上部トグルで **ダブルス / シングルス** を切替。
-- 共有state = `cfg{store, boards, groups}`。
-- イベント別state = `dbl` / `sgl` ＝ `{teams, groups, rr, brk:{winners,losers}, assign}`。
-- アクティブイベント参照: `ev = mode==='doubles' ? dbl : sgl`。`teams/groups/rr/brk/assign` とその setter はこの `ev` を指す（既存関数が両モードで動く）。`isS = mode==='singles'`。
+## 3イベント構成（モード切替）
+画面上部トグルで **ダブルス / シングルス / シングルストーナメント** を切替（`mode = 'doubles' | 'singlesrr' | 'singles'`）。
+- 共有state = `cfg{store, boards, groups}`。エントリー名簿：ダブルス=`pairs`+`singles`／シングルス2モードは **`sNames` を共有**（同じ人で両方式を回せる）。
+- イベント別state = `dbl`（doubles）/ `sglR`（**新**singlesrr）/ `sgl`（singles＝ノックアウト）＝各 `{teams, groups, rr, brk:{winners,losers}, assign}`。
+- アクティブイベント参照: `ev = mode==='doubles'?dbl : mode==='singlesrr'?sglR : sgl`。`teams/groups/rr/brk/assign` と setter はこの `ev` を指す（既存関数が全モードで動く）。
+- **`isS = mode==='singles'`（=ノックアウト判定。意味は不変）／`indiv = mode!=='doubles'`（=個人戦、unit='人'）**。タブは `isS ? TABS_S : TABS_D`（doublesとsinglesrrは同じTABS_D、singlesだけTABS_S）。
 
-### ダブルス（tabs: 設定 / エントリー / 組分け / ロビン表 / トーナメント）
+### ダブルス（`doubles`・tabs: 設定 / エントリー / 組分け / ロビン表 / トーナメント）
 - エントリー = ペア枠（選手A・B、行追加式）＋シングル枠（相方募集チップ、D&Dで相方指定/ペア化）。`entriesToTeams(pairs, singles)` で未ペアのシングルは自動ペア化。
-- 組分け = グループにランダム配置＋ドラッグで手動移動。**各組は最低4チーム**（`MIN_PER_GROUP=4`）。グループ数ステッパーは min2／max=floor(チーム数/4) で動的制限、`generate()`/`changeGroupCount` でも検証。例: 12チーム→最大3グループ。
-- ロビン表 = グループごと総当たり、罫線つき。決勝進出数は **各組のチーム数** で決定：`advanceForSize(そのグループの人数)`（**4チーム→上位2 / 5チーム以上→上位3**）。グループごとに進出数が変わりうる（例: 5/4/4/4 なら 3/2/2/2＝決勝9・ルーザー8）。`seedsFor` は組ごとに上位を集めてインターリーブ。
+- 組分け = グループにランダム配置＋ドラッグで手動移動。**各組の最低人数 = `minPerGroup(mode)`（ダブルス4／シングルスsinglesrr=3）**。グループ数ステッパーは min2／max=floor(人数/最低人数) で動的制限、`generate()`/`changeGroupCount` でも検証。例: ダブルス12チーム→最大3グループ。
+- ロビン表 = グループごと総当たり、罫線つき。決勝進出数は **各組のチーム数** で決定：`advanceForSize(そのグループの人数)`（**4→上位2 / 5以上→上位3**）。`seedsFor` は組ごとに上位を集めてインターリーブ。
 - トーナメント = 決勝＋ルーザー（ロビン終了で自動作成）。
 
-### シングルス（tabs: **エントリー / トーナメント のみ**）
-- 設定/組分け/ロビンは**無し**。当日募集の個人戦。
-- エントリー = **行リスト**（番号 + ⠿並び替え + 入力欄 + ×。sm以上は2列で圧縮、まとめ貼付details）。state = `sNames[]`。
+### シングルス（`singlesrr`・新規・tabs: ダブルスと同じ5つ）
+- **ダブルスの個人版**。エントリー（`sNames` の行リスト）→ `generate()` が `namesToTeams(sNames)`（1人1チーム）→ 組分け → ロビン表 → **決勝＋ルーザー**（ロビン終了で自動作成）。doublesと同じRRフローを `mode==='singlesrr'` 分岐で流用。unit='人'。
+- エントリーのボタンは「組分けへ →」（KOは「トーナメント作成 →」）。
+
+### シングルストーナメント（`singles`・既存ノックアウト・tabs: **エントリー / トーナメント のみ**）
+- 設定/組分け/ロビンは**無し**。当日募集の個人戦。エントリー = `sNames` の行リスト。
 - **全員で1本の勝ち抜きトーナメント**（`buildBracket(sNames)`）。グループ/ロビン/ルーザー無し。
+- ⚠️ このモードは設定タブが無い＝**「全データをリセット」ボタンも無い**（リセットしたい時はダブルス/シングルスタブの設定から）。
 
 ## ロビン表（ダブルス）
 - 罫線（`.rr-grid`）つき総当たり表。マスに対戦順 ①②③（4/5名は **`FIXED_SCHEDULES`** で指定順、他は `scheduleOrder` 円卓式）。
@@ -58,7 +63,7 @@
 - `cloudLoad(uid)` = ローカルクリア後に自分のdataを反映 / `cloudSave(uid)` = `STATE_KEYS` をJSONでupsert（変更を1.5秒デバウンス）。`Root`(認証ラッパー) / `Login` / `Splash` コンポーネント。ヘッダーにメール表示＋ログアウト。
 - **アクセスは承認制（自己登録なし）**: `Login` はログイン専用UI（signUp廃止）。発行依頼は「アカウント発行を依頼する（フォーム）」リンク → **Googleフォーム** `ACCOUNT_REQUEST_URL`（オーナーのGoogleアカウントで作成、回答→メール通知ON、「リンクを知っている全員」可）。`ACCOUNT_REQUEST_URL` が空なら `ADMIN_EMAIL` への mailto にフォールバック。フォーム編集は当該Googleアカウントの Forms から（質問: お名前必須/連絡先メール必須/店舗名任意）。オーナーが **Supabase ダッシュボードでユーザーを手動作成**（Authentication → Users → Add user → **Auto Confirm User** でメール送信不要＝メール上限も回避）。**Supabase側で公開サインアップもOFF**にすること（Authentication → Sign In/Providers の「Allow new users to sign up」）。
 - **テストアカウント**: `t_suzuki@dart-ace.com`（メール確認済）。**パスワードはリポジトリに置かない**（オーナーのパスワードマネージャーで管理）。Supabaseは「Confirm email」ON。
-- `STATE_KEYS = [mode, cfg, pairs, singles, sNames, dbl, sgl, checkin, shareId]`（export/import JSON もこのキー）。
+- `STATE_KEYS = [mode, cfg, pairs, singles, sNames, dbl, sgl, sglR, checkin, shareId]`（export/import JSON もこのキー）。
 
 ## 当日チェックイン（来場確認・個人ごと）
 - エントリー一覧の各個人に来場✓トグル。state = トップレベル `checkin{ personKey: true }`。personKey = `${pair.id}:a|b`（ペア）/ `sg:${i}`（相方募集）/ `sn:${i}`（シングルス名簿）。
@@ -87,8 +92,8 @@
 - **要Supabase**: `tournament_history(id,user_id,name,data,created_at)`＋RLS（本人のみ全操作）。SQLは `supabase-setup.sql`。未作成だと保存が失敗（パネルにメッセージ）。
 
 ## データモデル
-- 共有: `cfg{store, boards, groups}` / `pairs[{id,a,b}]` / `singles[name]`（相方募集中）/ `sNames[]`（シングルス名簿）/ `mode` / `checkin{personKey:true}`（来場）/ `shareId`（公開ビューID）
-- イベント別 `dbl`/`sgl`: `teams[{id,name,members,solo}]` / `groups[[teamId,...]]` / `rr{gi:{"a_b":{a,b,sa,sb,winner}}}`（a<b正規化）/ `brk{winners,losers}`（各 `{rounds:[[match,...]]}`）/ `assign{matchId:boardNo}`
+- 共有: `cfg{store, boards, groups}` / `pairs[{id,a,b}]` / `singles[name]`（相方募集中）/ `sNames[]`（シングルス名簿・**singlesrrとsinglesで共有**）/ `mode`（'doubles'|'singlesrr'|'singles'）/ `checkin{personKey:true}`（来場）/ `shareId`（公開ビューID）
+- イベント別 `dbl`/`sglR`/`sgl`: `teams[{id,name,members,solo}]` / `groups[[teamId,...]]` / `rr{gi:{"a_b":{a,b,sa,sb,winner}}}`（a<b正規化）/ `brk{winners,losers}`（各 `{rounds:[[match,...]]}`）/ `assign{matchId:boardNo}`。singlesrrは `namesToTeams(sNames)` で1人1チーム化。公開/履歴スナップショットも `mode` で `dbl/sglR/sgl` を出し分け。
 
 ## 主要関数（index.html 内）
 - `advanceForSize(n)` 各組の決勝進出数（n=その組のチーム数。5以上→3 / 4以下→2） / `circled(n)` 丸数字 / `FIXED_SCHEDULES` 4・5名の対戦順 / `scheduleOrder(ids)` 円卓式

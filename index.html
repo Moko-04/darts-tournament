@@ -78,7 +78,7 @@ const ACCOUNT_REQUEST_URL = 'https://docs.google.com/forms/d/e/1FAIpQLScJjC8-0kn
 /* ---------- 永続化 ---------- */
 const load = (k, d) => { try { const v = localStorage.getItem('darts_'+k); return v ? JSON.parse(v) : d; } catch { return d; } };
 const save = (k, v) => { try { localStorage.setItem('darts_'+k, JSON.stringify(v)); } catch {} };
-const STATE_KEYS = ['mode', 'cfg', 'pairs', 'singles', 'sNames', 'dbl', 'sgl', 'checkin', 'shareId'];
+const STATE_KEYS = ['mode', 'cfg', 'pairs', 'singles', 'sNames', 'dbl', 'sgl', 'sglR', 'checkin', 'shareId'];
 // クラウド（Supabase）読み込み: 前のユーザーのローカルを消してから自分のデータを反映
 async function cloudLoad(userId) {
   STATE_KEYS.forEach(k => localStorage.removeItem('darts_' + k));
@@ -104,7 +104,7 @@ async function publishShare(userId, shareId) {
 // 大会履歴（アカウントごと）
 function currentBlob() {
   const blob = {};
-  ['mode', 'cfg', 'pairs', 'singles', 'sNames', 'dbl', 'sgl', 'checkin'].forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) try { blob[k] = JSON.parse(v); } catch (e) {} });
+  ['mode', 'cfg', 'pairs', 'singles', 'sNames', 'dbl', 'sgl', 'sglR', 'checkin'].forEach(k => { const v = localStorage.getItem('darts_' + k); if (v != null) try { blob[k] = JSON.parse(v); } catch (e) {} });
   return blob;
 }
 async function saveHistory(userId, name, blob) { const { error } = await supa.from('tournament_history').insert({ user_id: userId, name, data: blob }); if (error) throw error; }
@@ -138,7 +138,8 @@ function importData(file) {
 const GMARK = ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16'];
 const SEP = /[\s,，、・･\/／&＆\+]+/;
 const advanceForSize = n => (n >= 5 ? 3 : 2); // 各組の決勝進出数: その組のチーム数で決定（5チーム以上→上位3 / 4チーム→上位2）
-const MIN_PER_GROUP = 4; // 各グループの最低チーム数（1組=ペア。各組は最低4チーム＝4組）
+const MIN_PER_GROUP = 4; // 各グループの最低チーム数（ダブルス＝各組4チーム）
+const minPerGroup = m => (m === 'singlesrr' ? 3 : MIN_PER_GROUP); // シングルス(個人ロビン)は各組3人以上でOK
 const circled = n => (n >= 1 && n <= 20) ? String.fromCharCode(0x2460 + n - 1) : String(n);
 // 指定の対戦順（位置1始まり）。4名・5名はこの順に固定。
 const FIXED_SCHEDULES = {
@@ -298,6 +299,8 @@ function App({ session }) {
     return blank();
   });
   const [sgl, setSgl] = useState(load('sgl', null) || blank());
+  // 新シングルス（組分け＋ロビン表＋決勝/ルーザー。ダブルスの個人版）
+  const [sglR, setSglR] = useState(load('sglR', null) || blank());
   // 当日チェックイン（来場確認）: { personKey: true }。personKey = `${pair.id}:a|b` / `sg:${i}`(相方募集) / `sn:${i}`(シングルス名簿)
   const [checkin, setCheckin] = useState(load('checkin', {}));
   // 公開ビュー用の共有ID（一度だけ生成して固定）
@@ -314,6 +317,7 @@ function App({ session }) {
   useEffect(() => save('sNames', sNames), [sNames]);
   useEffect(() => save('dbl', dbl), [dbl]);
   useEffect(() => save('sgl', sgl), [sgl]);
+  useEffect(() => save('sglR', sglR), [sglR]);
   useEffect(() => save('checkin', checkin), [checkin]);
   useEffect(() => save('shareId', shareId), [shareId]);
 
@@ -328,29 +332,29 @@ function App({ session }) {
     if (!AUTH_ENABLED || !session) return;
     const t = setTimeout(() => cloudSave(session.user.id), 1500);
     return () => clearTimeout(t);
-  }, [mode, cfg, pairs, singles, sNames, dbl, sgl, checkin, shareId]);
+  }, [mode, cfg, pairs, singles, sNames, dbl, sgl, sglR, checkin, shareId]);
 
   // 公開進行ビューへの自動反映（ログイン時のみ・2秒デバウンスで tournament_shares に upsert）
   useEffect(() => {
     if (!AUTH_ENABLED || !session || !shareId) return;
     const t = setTimeout(() => publishShare(session.user.id, shareId), 2000);
     return () => clearTimeout(t);
-  }, [session, shareId, mode, cfg, pairs, singles, sNames, dbl, sgl, checkin]);
+  }, [session, shareId, mode, cfg, pairs, singles, sNames, dbl, sgl, sglR, checkin]);
 
   // アクティブなイベントの本体＋セッター（モードで切替）
-  const ev = mode === 'doubles' ? dbl : sgl;
-  const setEv = mode === 'doubles' ? setDbl : setSgl;
+  const ev = mode === 'doubles' ? dbl : mode === 'singlesrr' ? sglR : sgl;
+  const setEv = mode === 'doubles' ? setDbl : mode === 'singlesrr' ? setSglR : setSgl;
   const upd = (key, val) => setEv(e => ({ ...e, [key]: typeof val === 'function' ? val(e[key]) : val }));
   const teams = ev.teams, groups = ev.groups, rr = ev.rr, brk = ev.brk, assign = ev.assign;
   const setTeams = v => upd('teams', v), setGroups = v => upd('groups', v), setRr = v => upd('rr', v), setBrk = v => upd('brk', v), setAssign = v => upd('assign', v);
-  const isS = mode === 'singles', unit = isS ? '人' : 'チーム';
+  const isS = mode === 'singles', indiv = mode !== 'doubles', unit = indiv ? '人' : 'チーム';
 
   // 当日チェックイン（来場確認）
   const toggleCheckin = key => setCheckin(c => { const n = { ...c }; if (n[key]) delete n[key]; else n[key] = true; return n; });
-  const entrantCount = isS
+  const entrantCount = indiv
     ? sNames.filter(n => (n || '').trim()).length
     : pairs.reduce((a, p) => a + ((p.a || '').trim() ? 1 : 0) + ((p.b || '').trim() ? 1 : 0), 0) + singles.filter(n => (n || '').trim()).length;
-  const checkinCount = isS
+  const checkinCount = indiv
     ? sNames.filter((n, i) => (n || '').trim() && checkin[`sn:${i}`]).length
     : pairs.reduce((a, p) => a + (((p.a || '').trim() && checkin[`${p.id}:a`]) ? 1 : 0) + (((p.b || '').trim() && checkin[`${p.id}:b`]) ? 1 : 0), 0) + singles.filter((n, i) => (n || '').trim() && checkin[`sg:${i}`]).length;
 
@@ -366,7 +370,7 @@ function App({ session }) {
       setPairs(DEV_PAIRS); setSingles([]); setDbl(blank());
     } else {
       if ((sNames.length || teams.length) && !confirm('現在のシングルスデータを破棄してテスト名簿を投入します。よろしいですか？')) return;
-      setSNames(DEV_SINGLES); setSgl(blank());
+      setSNames(DEV_SINGLES); setSgl(blank()); setSglR(blank());
     }
     setTab('entry');
   }
@@ -388,11 +392,12 @@ function App({ session }) {
       setTab('tournament');
       return;
     }
-    const ts = entriesToTeams(pairs, singles);
-    if (ts.length < 2) { alert('2チーム以上のエントリーが必要です。'); return; }
-    if (ts.length < cfg.groups * MIN_PER_GROUP) {
-      const maxG = Math.max(1, Math.floor(ts.length / MIN_PER_GROUP));
-      alert(`${cfg.groups}グループには最低${cfg.groups * MIN_PER_GROUP}チーム必要です（各組${MIN_PER_GROUP}チーム以上・ダブルスは2名で1チーム）。\n現在 ${ts.length}チーム。グループ数を ${maxG} 以下にするか、追加してください。`);
+    const ts = mode === 'singlesrr' ? namesToTeams(sNames) : entriesToTeams(pairs, singles);
+    if (ts.length < 2) { alert(`2${unit}以上のエントリーが必要です。`); return; }
+    const mpg = minPerGroup(mode);
+    if (ts.length < cfg.groups * mpg) {
+      const maxG = Math.max(1, Math.floor(ts.length / mpg));
+      alert(`${cfg.groups}グループには最低${cfg.groups * mpg}${unit}必要です（各組${mpg}${unit}以上${mode === 'doubles' ? '・ダブルスは2名で1チーム' : ''}）。\n現在 ${ts.length}${unit}。グループ数を ${maxG} 以下にするか、追加してください。`);
       return;
     }
     setTeams(ts); setGroups(distribute(ts, cfg.groups));
@@ -405,8 +410,9 @@ function App({ session }) {
   }
   // グループ数を変更したら、既にチームがあれば即座に再振り分け（設定と組分けを常に一致させる）
   function changeGroupCount(v) {
-    if (teams.length && teams.length < v * MIN_PER_GROUP) {
-      alert(`各組${MIN_PER_GROUP}チーム以上にするため、${v}グループには最低${v * MIN_PER_GROUP}チーム必要です（現在 ${teams.length}チーム）。`);
+    const mpg = minPerGroup(mode);
+    if (teams.length && teams.length < v * mpg) {
+      alert(`各組${mpg}${unit}以上にするため、${v}グループには最低${v * mpg}${unit}必要です（現在 ${teams.length}${unit}）。`);
       return;
     }
     const hasResults = rr && Object.keys(rr).length > 0;
@@ -431,8 +437,8 @@ function App({ session }) {
   }
   async function resetAll() {
     const loggedIn = AUTH_ENABLED && session;
-    const hasData = (dbl.teams && dbl.teams.length) || (sgl.teams && sgl.teams.length)
-      || (dbl.brk && dbl.brk.winners) || (sgl.brk && sgl.brk.winners)
+    const hasData = (dbl.teams && dbl.teams.length) || (sgl.teams && sgl.teams.length) || (sglR.teams && sglR.teams.length)
+      || (dbl.brk && dbl.brk.winners) || (sgl.brk && sgl.brk.winners) || (sglR.brk && sglR.brk.winners)
       || (sNames && sNames.some(n => (n || '').trim())) || (pairs && pairs.some(p => (p.a || '').trim() || (p.b || '').trim()));
     const willArchive = loggedIn && hasData;
     if (!confirm(willArchive
@@ -444,7 +450,7 @@ function App({ session }) {
       try { await saveHistory(session.user.id, `${store ? store + ' ' : ''}${d}`.trim() || '大会', currentBlob()); }
       catch (e) { console.warn('auto-save history', e); if (!confirm('履歴への自動保存に失敗しました。それでも消去しますか？')) return; }
     }
-    setPairs([]); setSingles([]); setSNames([]); setCheckin({}); setDbl(blank()); setSgl(blank()); setTab('setup');
+    setPairs([]); setSingles([]); setSNames([]); setCheckin({}); setDbl(blank()); setSgl(blank()); setSglR(blank()); setTab('setup');
   }
 
   function setResult(gi, a, b, patch) {
@@ -508,10 +514,10 @@ function App({ session }) {
         )}
       </header>
 
-      <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-min">
-        {[['doubles', 'ダブルス'], ['singles', 'シングルス']].map(([k, l]) => (
-          <button key={k} onClick={() => { setMode(k); if (k === 'singles' && !['entry', 'tournament'].includes(tab)) setTab('entry'); }}
-            className={`px-5 py-1.5 rounded-md text-sm font-bold whitespace-nowrap transition ${mode === k ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>{l}</button>
+      <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-min max-w-full overflow-x-auto scroll-x">
+        {[['doubles', 'ダブルス'], ['singlesrr', 'シングルス'], ['singles', 'シングルストーナメント']].map(([k, l]) => (
+          <button key={k} onClick={() => { setMode(k); const ok = (k === 'singles' ? TABS_S : TABS_D).map(t => t[0]); if (!ok.includes(tab)) setTab(ok[0]); }}
+            className={`px-4 py-1.5 rounded-md text-sm font-bold whitespace-nowrap transition ${mode === k ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>{l}</button>
         ))}
       </div>
 
@@ -537,8 +543,8 @@ function App({ session }) {
           {AUTH_ENABLED && session && <HistoryPanel session={session} />}
         </div>
       )}
-      {tab === 'entry' && (isS
-        ? <SinglesEntry {...{ sNames, setSNames, generate, cfg, checkin, toggleCheckin, shareId }} />
+      {tab === 'entry' && (indiv
+        ? <SinglesEntry {...{ sNames, setSNames, generate, cfg, checkin, toggleCheckin, shareId, mode }} />
         : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin, shareId }} />)}
       {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg, unit }} />}
       {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }} />}
@@ -626,8 +632,9 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
       </div>
     </div>
   );
-  // 各組 MIN_PER_GROUP チーム以上にするための上限（チーム入力後のみ動的制限。未入力時は16）
-  const maxGroups = teams.length ? Math.max(2, Math.floor(teams.length / MIN_PER_GROUP)) : 16;
+  // 各組の最低人数（ダブルス4／シングルス3）以上にするための上限（チーム入力後のみ動的制限。未入力時は16）
+  const mpg = minPerGroup(mode);
+  const maxGroups = teams.length ? Math.max(2, Math.floor(teams.length / mpg)) : 16;
   return (
     <div className="space-y-5">
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
@@ -638,7 +645,7 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
 
       <div className="grid grid-cols-2 gap-3">
         <Step label="🎯 台数（ボード）" val={cfg.boards} set={v => setCfg({ ...cfg, boards: v })} min={1} max={20} hint="設置台数" />
-        <Step label="🧩 グループ数" val={cfg.groups} set={changeGroupCount} min={2} max={maxGroups} hint={`各組${MIN_PER_GROUP}チーム以上`} />
+        <Step label="🧩 グループ数" val={cfg.groups} set={changeGroupCount} min={2} max={maxGroups} hint={`各組${mpg}${mode === 'doubles' ? 'チーム' : '人'}以上`} />
       </div>
 
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm text-sm text-gray-600">
@@ -669,10 +676,12 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
         </div>
       </div>
 
+      {DEV_SEED && (
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
-        <div className="text-sm text-amber-800">🧪 開発用テストデータ（{mode === 'singles' ? 'シングルス16名' : 'ダブルス17組'}）<span className="text-amber-600 text-xs ml-1">※完成時に外します</span></div>
-        <button onClick={loadTestData} className="bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg px-4 py-2 whitespace-nowrap">{mode === 'singles' ? '16名' : '17組'}を投入（やり直し）</button>
+        <div className="text-sm text-amber-800">🧪 開発用テストデータ（{mode === 'doubles' ? 'ダブルス17組' : 'シングルス16名'}）<span className="text-amber-600 text-xs ml-1">※完成時に外します</span></div>
+        <button onClick={loadTestData} className="bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg px-4 py-2 whitespace-nowrap">{mode === 'doubles' ? '17組' : '16名'}を投入（やり直し）</button>
       </div>
+      )}
 
       {teams.length > 0 && (
         <button onClick={resetAll} className="px-5 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm text-gray-600">全データをリセット</button>
@@ -909,7 +918,7 @@ function EntryTab({ pairs, setPairs, singles, setSingles, generate, cfg, checkin
 }
 
 /* ---------- シングルス エントリー（個人名・行リスト） ---------- */
-function SinglesEntry({ sNames, setSNames, generate, cfg, checkin, toggleCheckin, shareId }) {
+function SinglesEntry({ sNames, setSNames, generate, cfg, checkin, toggleCheckin, shareId, mode }) {
   const [dragI, setDragI] = useState(null);
   const [overI, setOverI] = useState(null);
   const [bulk, setBulk] = useState('');
@@ -974,9 +983,9 @@ function SinglesEntry({ sNames, setSNames, generate, cfg, checkin, toggleCheckin
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center justify-between gap-3 flex-wrap">
         <span className="text-sm text-gray-600">参加者 <b className="text-lg text-gray-900">{valid}</b>名</span>
-        <button onClick={generate} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-lg px-6 py-2.5">トーナメント作成 →</button>
+        <button onClick={generate} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-lg px-6 py-2.5">{mode === 'singlesrr' ? '組分けへ →' : 'トーナメント作成 →'}</button>
       </div>
-      <p className="text-xs text-gray-400">※ シングルスは参加者全員で1つの勝ち抜きトーナメントを作成します。</p>
+      <p className="text-xs text-gray-400">{mode === 'singlesrr' ? '※ 個人ごとに組分け→ロビン表→決勝＋ルーザートーナメントを作成します。' : '※ シングルスは参加者全員で1つの勝ち抜きトーナメントを作成します。'}</p>
     </div>
   );
 }
@@ -1687,7 +1696,7 @@ function SnapshotView({ snap, updatedAt, live }) {
   const mode = snap.mode || 'doubles';
   const cfg = snap.cfg || { store: '', boards: 8, groups: 4 };
   const isS = mode === 'singles';
-  const ev = (isS ? snap.sgl : snap.dbl) || { teams: [], groups: [], rr: {}, brk: { winners: null, losers: null }, assign: {} };
+  const ev = (mode === 'doubles' ? snap.dbl : mode === 'singlesrr' ? snap.sglR : snap.sgl) || { teams: [], groups: [], rr: {}, brk: { winners: null, losers: null }, assign: {} };
   const teams = ev.teams || [], groups = ev.groups || [], rr = ev.rr || {}, brk = ev.brk || { winners: null, losers: null };
   const { nameOf, standings } = makeHelpers(teams, groups, rr);
   const hasRR = !isS && groups.length > 0;
@@ -1705,7 +1714,7 @@ function SnapshotView({ snap, updatedAt, live }) {
           <span className="text-[11px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium shrink-0">{live ? '閲覧専用' : '履歴'}</span>
           {fmt && <span className="text-gray-400 text-xs ml-auto shrink-0">{live ? '更新 ' : ''}{fmt}</span>}
         </div>
-        {teams.length > 0 && <p className="text-xs text-gray-400 mt-1">{teams.length}{isS ? '人' : 'チーム'}{!isS ? ` / ${groups.length}グループ` : ''}{live ? ' ・ 約12秒ごとに自動更新' : ''}</p>}
+        {teams.length > 0 && <p className="text-xs text-gray-400 mt-1">{teams.length}{mode === 'doubles' ? 'チーム' : '人'}{!isS ? ` / ${groups.length}グループ` : ''}{live ? ' ・ 約12秒ごとに自動更新' : ''}</p>}
       </header>
       <nav className="flex gap-5 border-b border-gray-200 mb-6">
         {tabs.map(([k, label]) => (
