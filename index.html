@@ -351,6 +351,8 @@ function App({ session }) {
   // グループ数はモード別：ダブルス=cfg.groups／シングルス(singlesrr)=cfg.groupsS
   const groupCount = mode === 'doubles' ? cfg.groups : (cfg.groupsS == null ? 4 : cfg.groupsS);
   const setGroupCount = v => setCfg(c => mode === 'doubles' ? { ...c, groups: v } : { ...c, groupsS: v });
+  // ルーザートーナメント有無（ダブルスは常時／シングルスsinglesrrは cfg.losersS で切替・既定ON）
+  const withLosers = mode === 'doubles' ? true : (cfg.losersS !== false);
 
   // 当日チェックイン（来場確認）
   const toggleCheckin = key => setCheckin(c => { const n = { ...c }; if (n[key]) delete n[key]; else n[key] = true; return n; });
@@ -551,7 +553,7 @@ function App({ session }) {
         : <EntryTab {...{ pairs, setPairs, singles, setSingles, generate, cfg, checkin, toggleCheckin, shareId }} />)}
       {tab === 'groups' && <GroupEditor {...{ groups, nameOf, movePlayer, reshuffle, cfg, unit }} />}
       {tab === 'rr' && <RoundRobin {...{ groups, nameOf, getResult, setResult, standings, cfg, swapTeams, assign, setAssign }} />}
-      {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames, session }} />}
+      {tab === 'tournament' && <TournamentTab {...{ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames, session, withLosers }} />}
     </div>
   );
 }
@@ -638,6 +640,8 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
   // 各組の最低人数（ダブルス4／シングルス3）以上にするための上限（チーム入力後のみ動的制限。未入力時は16）
   const mpg = minPerGroup(mode);
   const maxGroups = teams.length ? Math.max(2, Math.floor(teams.length / mpg)) : 16;
+  const u = mode === 'doubles' ? 'チーム' : '人';
+  const withLosers = mode === 'doubles' ? true : (cfg.losersS !== false);
   return (
     <div className="space-y-5">
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
@@ -652,9 +656,22 @@ function Setup({ cfg, setCfg, changeGroupCount, resetAll, teams, setTab, loadTes
       </div>
 
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm text-sm text-gray-600">
-        決勝進出：各組 <b className="text-gray-900">上位2チーム</b>（5チーム以上の組は上位3）が決勝トーナメント、残りがルーザートーナメント
-        <span className="text-gray-400 ml-1">（組の人数で自動：4チーム→上位2 / 5チーム以上→上位3）</span>
+        決勝進出：各組 <b className="text-gray-900">上位2{u}</b>（5{u}以上の組は上位3）が決勝トーナメント{withLosers ? '、残りがルーザートーナメント' : '（ルーザーは作りません）'}
+        <span className="text-gray-400 ml-1">（組の人数で自動：4{u}→上位2 / 5{u}以上→上位3）</span>
       </div>
+
+      {mode === 'singlesrr' && (
+        <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium">ルーザートーナメントを作る</div>
+            <p className="text-xs text-gray-400 mt-0.5">決勝に上がれなかった人の敗者戦。OFFなら決勝のみ。</p>
+          </div>
+          <button onClick={() => setCfg({ ...cfg, losersS: !withLosers })} aria-pressed={withLosers}
+            className={`relative shrink-0 w-12 h-7 rounded-full transition ${withLosers ? 'bg-emerald-500' : 'bg-gray-300'}`}>
+            <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${withLosers ? 'left-[22px]' : 'left-0.5'}`} />
+          </button>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm flex items-center justify-between gap-3">
         <div>
@@ -1410,7 +1427,7 @@ function FinishBar({ session, cfg }) {
 }
 
 // ダブルス＝決勝＋ルーザー（ロビン終了で自動作成）／シングルス＝全員で1本
-function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames, session }) {
+function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult, isS, sNames, session, withLosers }) {
   let remaining = 0;
   groups.forEach((ids, gi) => { for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const r = getResult(gi, ids[i], ids[j]); if (!r || r.winner == null) remaining++; } });
   const rrComplete = groups.length > 0 && remaining === 0;
@@ -1424,8 +1441,13 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
   };
   useEffect(() => {
     if (isS || !rrComplete) return;
-    if (!brk.winners || !brk.losers) setBrk(prev => ({ ...prev, winners: prev.winners || buildBracket(seedsFor('winners')), losers: prev.losers || buildBracket(seedsFor('losers')) }));
-  }, [rrComplete, isS]);
+    setBrk(prev => {
+      const next = { ...prev };
+      if (!next.winners) next.winners = buildBracket(seedsFor('winners'));
+      if (withLosers && !next.losers) next.losers = buildBracket(seedsFor('losers'));
+      return next;
+    });
+  }, [rrComplete, isS, withLosers]);
   const mkSetWinner = kind => (mid, side) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); const m = findMatch(nb, mid); m.winner = side; if (side != null) m.board = null; return { ...prev, [kind]: nb }; });
   const mkSetBoard = kind => (mid, board) => setBrk(prev => { const nb = JSON.parse(JSON.stringify(prev[kind])); findMatch(nb, mid).board = board; return { ...prev, [kind]: nb }; });
 
@@ -1446,7 +1468,7 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
     );
   }
 
-  const regen = () => { if (!confirm('現在のトーナメントを破棄して、今の順位で作り直しますか？')) return; setBrk(prev => ({ ...prev, winners: buildBracket(seedsFor('winners')), losers: buildBracket(seedsFor('losers')) })); };
+  const regen = () => { if (!confirm('現在のトーナメントを破棄して、今の順位で作り直しますか？')) return; setBrk(prev => ({ ...prev, winners: buildBracket(seedsFor('winners')), losers: withLosers ? buildBracket(seedsFor('losers')) : null })); };
   if (!groups.length) return <Empty msg="先にエントリーしてグループに振り分けてください。" />;
   if (!brk.winners && !brk.losers) return <Empty msg={`ラウンドロビンが終わると自動でトーナメントを作成します（残り ${remaining} 試合）。`} />;
   // 決勝・ルーザー両方で使用中の台（未確定試合に割当済み）。両ブラケットで重複させない。
@@ -1455,17 +1477,19 @@ function TournamentTab({ groups, standings, nameOf, brk, setBrk, cfg, getResult,
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold">トーナメント <span className="text-xs font-normal text-gray-400">（各組上位2→決勝・5チーム以上の組は上位3 / 残り→ルーザー）</span></h2>
+        <h2 className="text-lg font-bold">トーナメント <span className="text-xs font-normal text-gray-400">（各組上位2→決勝・5以上の組は上位3{withLosers ? ' / 残り→ルーザー' : '・ルーザー無し'}）</span></h2>
         <button onClick={regen} className="text-xs text-gray-500 hover:text-gray-800 underline">今の順位で組み直し</button>
       </div>
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
         <div className="text-sm font-bold text-emerald-700 mb-2">🏆 決勝トーナメント</div>
         {brk.winners ? <BracketView b={brk.winners} nameOf={nameOf} setWinner={mkSetWinner('winners')} setBoard={mkSetBoard('winners')} boards={cfg.boards} usedBoards={usedBoards} champTitle="優勝" /> : <p className="text-sm text-gray-400">作成待ち</p>}
       </div>
+      {withLosers && (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
         <div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div>
         {brk.losers ? <BracketView b={brk.losers} nameOf={nameOf} setWinner={mkSetWinner('losers')} setBoard={mkSetBoard('losers')} boards={cfg.boards} usedBoards={usedBoards} /> : <p className="text-sm text-gray-400">作成待ち</p>}
       </div>
+      )}
       <FinishBar session={session} cfg={cfg} />
     </div>
   );
@@ -1703,6 +1727,7 @@ function SnapshotView({ snap, updatedAt, live }) {
   const teams = ev.teams || [], groups = ev.groups || [], rr = ev.rr || {}, brk = ev.brk || { winners: null, losers: null };
   const { nameOf, standings } = makeHelpers(teams, groups, rr);
   const hasRR = !isS && groups.length > 0;
+  const withLosers = mode === 'doubles' ? true : (cfg.losersS !== false);
   const hasBrk = !!(brk && (brk.winners || brk.losers));
   const tabs = isS ? [['tournament', 'トーナメント']] : [['rr', '順位表'], ['tournament', 'トーナメント']];
   const curTab = tabs.some(t => t[0] === tab) ? tab : tabs[0][0];
@@ -1733,7 +1758,7 @@ function SnapshotView({ snap, updatedAt, live }) {
           ? <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><BracketView b={brk.winners} nameOf={nameOf} boards={cfg.boards} readOnly champTitle="優勝" /></div>
           : <div className="space-y-6">
             {brk.winners && <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><div className="text-sm font-bold text-emerald-700 mb-2">🏆 決勝トーナメント</div><BracketView b={brk.winners} nameOf={nameOf} boards={cfg.boards} readOnly champTitle="優勝" /></div>}
-            {brk.losers && <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div><BracketView b={brk.losers} nameOf={nameOf} boards={cfg.boards} readOnly /></div>}
+            {withLosers && brk.losers && <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><div className="text-sm font-bold text-amber-700 mb-2">🥈 ルーザートーナメント</div><BracketView b={brk.losers} nameOf={nameOf} boards={cfg.boards} readOnly /></div>}
           </div>
       ) : <Empty msg="トーナメントはまだ作成されていません。" />)}
     </>
