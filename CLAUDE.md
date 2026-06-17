@@ -9,6 +9,7 @@
 
 ## 技術構成
 - **単一HTMLファイル `index.html`**。ビルド不要。React 18 + Babel standalone + Tailwind + **Supabase** + **qrcodejs**（公開ビューのQR用）をすべてCDNで読込、ブラウザ実行。
+- ⚠️ **Babelは7系に固定必須**（`@babel/standalone@7.26.4`）。未固定だと **Babel 8** が配信され、JSXを自動ランタイムで出力→`import "react/jsx-runtime"` を注入→classicな `<script type="text/babel">` では実行不能→**画面が真っ白**になる（2026-06に発生・修正）。8系へ上げるならビルド方式に変える必要あり。
 - 状態は **localStorage**（キー接頭辞 `darts_`）。Supabase接続時は**クラウド保存も併用**（後述）。
 - UIは **ライト（白地・罫線）テーマ**。
 - ユーザーは普段 **file://**（`index.html` を直接ダブルクリック）で確認。スクショ(preview_screenshot)はTailwind CDNで詰まりがちなので、検証は `preview_eval` のDOM評価＋`preview_console_logs` で行う。
