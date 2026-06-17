@@ -1136,14 +1136,14 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
     <div>
       <div className="text-sm font-bold text-gray-700 mb-1.5">グループ {GMARK[gi]}</div>
       <div className="overflow-x-auto scroll-x rounded-xl border border-gray-300 shadow-sm bg-white">
-        <table className="rr-grid w-full text-sm border-collapse">
+        <table className="rr-grid sm:w-full text-sm border-collapse">
           <thead>
             <tr className="border-b border-gray-300">
               <th className="py-2.5 px-2 w-8"></th>
-              <th className="py-2.5 px-2 text-left font-bold w-28 sm:w-44">名前</th>
-              {ids.map((_, c) => <th key={c} className="py-2.5 px-2 w-16 text-center font-bold">{c + 1}</th>)}
-              <th className="py-2.5 px-2 w-16 text-center font-bold border-l border-gray-200">勝敗</th>
-              <th className="py-2.5 px-2 w-16 text-center font-bold">Legs</th>
+              <th className="py-2.5 px-2 text-left font-bold whitespace-nowrap sm:w-44">名前</th>
+              {ids.map((_, c) => <th key={c} className="py-2.5 px-1 w-11 sm:w-16 text-center font-bold">{c + 1}</th>)}
+              <th className="py-2.5 px-1 w-11 sm:w-16 text-center font-bold border-l border-gray-200">勝敗</th>
+              <th className="py-2.5 px-1 w-12 sm:w-16 text-center font-bold">Legs</th>
               <th className="py-2.5 px-2 w-12 text-center font-bold">順位</th>
             </tr>
           </thead>
@@ -1159,7 +1159,7 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
                     onDragOver={readOnly ? undefined : e => { if (drag) { e.preventDefault(); setOver(gi + ':' + rid); } }}
                     onDragLeave={readOnly ? undefined : () => setOver(o => o === gi + ':' + rid ? null : o)}
                     onDrop={readOnly ? undefined : e => { e.preventDefault(); if (drag) swapTeams(drag.gi, drag.id, gi, rid); setDrag(null); setOver(null); }}>
-                    <div className="w-28 sm:w-44 font-medium leading-snug">
+                    <div className="whitespace-nowrap sm:w-44 font-medium leading-snug">
                       {!readOnly && <span draggable onDragStart={() => setDrag({ gi, id: rid })} onDragEnd={() => { setDrag(null); setOver(null); }}
                         title="ドラッグで入れ替え"
                         className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-600 mr-1 select-none opacity-0 group-hover:opacity-100 transition">⠿</span>}
@@ -1178,20 +1178,20 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
                     const key = pkey(rid, cid), ord = orderMap[key], isNext = key === nextKey;
                     const boardN = assign[rrGid(rid, cid)];
                     let inner, cls = '', style = {};
-                    if (decided) { inner = `${myLeg} - ${opLeg}`; cls = win ? 'bg-emerald-50 text-emerald-700 font-semibold' : 'text-gray-500'; }
+                    if (decided) { inner = `${myLeg}-${opLeg}`; cls = win ? 'bg-emerald-50 text-emerald-700 font-semibold' : 'text-gray-500'; }
                     else if (playing) { inner = <span className="text-orange-600 font-bold text-xs">試合中</span>; cls = 'bg-orange-50'; }
                     else { inner = <span className={`font-bold ${isNext ? 'text-white' : 'text-gray-400'}`}>{circled(ord)}</span>; cls = isNext ? 'bg-blue-500' : ''; }
                     return (
                       <td key={cid} onClick={readOnly ? undefined : () => setEdit({ a: rid, b: cid })}
                         style={style}
-                        className={`text-center text-base tabular-nums ${readOnly ? '' : 'cursor-pointer hover:brightness-95'} ${cls}`}>
+                        className={`text-center text-sm sm:text-base tabular-nums whitespace-nowrap px-1 ${readOnly ? '' : 'cursor-pointer hover:brightness-95'} ${cls}`}>
                         {inner}
                         {boardN && !decided && <div className="text-[10px] text-blue-700 font-bold leading-none mt-0.5">{boardN}番台</div>}
                       </td>
                     );
                   })}
-                  <td className="py-2 px-2 text-center tabular-nums border-l border-gray-200">{s.w} - {s.l}</td>
-                  <td className="py-2 px-2 text-center tabular-nums text-gray-600">{s.lf} - {s.la}</td>
+                  <td className="py-2 px-1 text-center text-sm sm:text-base tabular-nums border-l border-gray-200 whitespace-nowrap">{s.w}-{s.l}</td>
+                  <td className="py-2 px-1 text-center text-sm sm:text-base tabular-nums text-gray-600 whitespace-nowrap">{s.lf}-{s.la}</td>
                   <td className="py-2 px-2 text-center font-bold text-base">{rankOf[rid]}</td>
                 </tr>
               );
