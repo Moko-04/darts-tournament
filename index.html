@@ -1140,7 +1140,7 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
           <thead>
             <tr className="border-b border-gray-300">
               <th className="py-2.5 px-2 w-8"></th>
-              <th className="py-2.5 px-2 text-left font-bold w-44">名前</th>
+              <th className="py-2.5 px-2 text-left font-bold w-28 sm:w-44">名前</th>
               {ids.map((_, c) => <th key={c} className="py-2.5 px-2 w-16 text-center font-bold">{c + 1}</th>)}
               <th className="py-2.5 px-2 w-16 text-center font-bold border-l border-gray-200">勝敗</th>
               <th className="py-2.5 px-2 w-16 text-center font-bold">Legs</th>
@@ -1159,7 +1159,7 @@ function GroupTable({ gi, ids, nameOf, getResult, setResult, standings, drag, se
                     onDragOver={readOnly ? undefined : e => { if (drag) { e.preventDefault(); setOver(gi + ':' + rid); } }}
                     onDragLeave={readOnly ? undefined : () => setOver(o => o === gi + ':' + rid ? null : o)}
                     onDrop={readOnly ? undefined : e => { e.preventDefault(); if (drag) swapTeams(drag.gi, drag.id, gi, rid); setDrag(null); setOver(null); }}>
-                    <div className="w-44 font-medium leading-snug">
+                    <div className="w-28 sm:w-44 font-medium leading-snug">
                       {!readOnly && <span draggable onDragStart={() => setDrag({ gi, id: rid })} onDragEnd={() => { setDrag(null); setOver(null); }}
                         title="ドラッグで入れ替え"
                         className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-600 mr-1 select-none opacity-0 group-hover:opacity-100 transition">⠿</span>}
@@ -1725,12 +1725,12 @@ function SnapshotView({ snap, updatedAt, live }) {
   const cfg = snap.cfg || { store: '', boards: 8, groups: 4 };
   const isS = mode === 'singles';
   const ev = (mode === 'doubles' ? snap.dbl : mode === 'singlesrr' ? snap.sglR : snap.sgl) || { teams: [], groups: [], rr: {}, brk: { winners: null, losers: null }, assign: {} };
-  const teams = ev.teams || [], groups = ev.groups || [], rr = ev.rr || {}, brk = ev.brk || { winners: null, losers: null };
-  const { nameOf, standings } = makeHelpers(teams, groups, rr);
+  const teams = ev.teams || [], groups = ev.groups || [], rr = ev.rr || {}, brk = ev.brk || { winners: null, losers: null }, assign = ev.assign || {};
+  const { nameOf, getResult, standings } = makeHelpers(teams, groups, rr);
   const hasRR = !isS && groups.length > 0;
   const withLosers = mode === 'doubles' ? true : (cfg.losersS !== false);
   const hasBrk = !!(brk && (brk.winners || brk.losers));
-  const tabs = isS ? [['tournament', 'トーナメント']] : [['rr', '順位表'], ['tournament', 'トーナメント']];
+  const tabs = isS ? [['tournament', 'トーナメント']] : [['rr', 'ロビン表'], ['tournament', 'トーナメント']];
   const curTab = tabs.some(t => t[0] === tab) ? tab : tabs[0][0];
   let fmt = '';
   try { fmt = updatedAt ? new Date(updatedAt).toLocaleString('ja-JP', live ? { hour: '2-digit', minute: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; } catch (e) {}
@@ -1752,8 +1752,8 @@ function SnapshotView({ snap, updatedAt, live }) {
         ))}
       </nav>
       {curTab === 'rr' && (hasRR
-        ? <PublicStandings {...{ groups, standings, nameOf }} />
-        : <Empty msg="まだ順位表がありません。" />)}
+        ? <RoundRobin {...{ groups, nameOf, getResult, standings, cfg, assign, readOnly: true }} />
+        : <Empty msg="まだロビン表がありません。" />)}
       {curTab === 'tournament' && (hasBrk ? (
         isS
           ? <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3"><BracketView b={brk.winners} nameOf={nameOf} boards={cfg.boards} readOnly champTitle="優勝" /></div>
